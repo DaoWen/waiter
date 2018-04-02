@@ -282,9 +282,9 @@
 
 (deftest test-service-view-logs-handler
   (let [scheduler (marathon/->MarathonScheduler (Object.) {:slave-port 5051} (fn [] nil) "/home/path/"
-                                                (atom {}) (atom {}) 0 (constantly true))
+                                                (atom {}) (atom {}) {} 0 (constantly true))
         configuration {:routines {:generate-log-url-fn (partial handler/generate-log-url identity)}
-                       :state {:scheduler scheduler}
+                       :scheduler {:scheduler scheduler}
                        :wrap-secure-request-fn utils/wrap-identity}
         handlers {:service-view-logs-handler-fn ((:service-view-logs-handler-fn request-handlers) configuration)}
         waiter-request?-fn (fn [_] true)
@@ -391,8 +391,8 @@
                        :routines {:allowed-to-manage-service?-fn allowed-to-manage-service?
                                   :generate-log-url-fn nil
                                   :make-inter-router-requests-sync-fn nil}
-                       :state {:router-id "router-id"
-                               :scheduler (Object.)}
+                       :state {:router-id "router-id"}
+                       :scheduler {:scheduler (Object.)}
                        :wrap-secure-request-fn utils/wrap-identity}
         handlers {:service-handler-fn ((:service-handler-fn request-handlers) configuration)}]
     (testing "service-handler:delete-successful"
@@ -463,8 +463,8 @@
                        :routines {:allowed-to-manage-service?-fn (constantly true)
                                   :generate-log-url-fn (partial handler/generate-log-url #(str "http://www.example.com" %))
                                   :make-inter-router-requests-sync-fn nil}
-                       :state {:router-id "router-id"
-                               :scheduler (Object.)}
+                       :state {:router-id "router-id"}
+                       :scheduler {:scheduler (Object.)}
                        :wrap-secure-request-fn utils/wrap-identity}
         handlers {:service-handler-fn ((:service-handler-fn request-handlers) configuration)}
         ring-handler (wrap-handler-json-response (ring-handler-factory waiter-request?-fn handlers))]

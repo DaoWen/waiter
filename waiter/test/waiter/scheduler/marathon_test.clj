@@ -583,7 +583,7 @@
         service-id "service-1"
         instance-id "service-1.A"
         make-marathon-scheduler #(->MarathonScheduler {} {} (fn [] nil) "/home/path/"
-                                                      (atom {}) %1 %2 (constantly true))
+                                                      (atom {}) %1 {} %2 (constantly true))
         successful-kill-result {:instance-id instance-id :killed? true :service-id service-id}
         failed-kill-result {:instance-id instance-id :killed? false :service-id service-id}]
     (with-redefs [t/now (fn [] current-time)]
@@ -637,7 +637,7 @@
         marathon-scheduler (->MarathonScheduler {} {} (fn [] nil) "/home/path/"
                                                 (atom {service-id [:failed-instances]})
                                                 (atom {service-id :kill-call-info})
-                                                100 (constantly true))
+                                                {} 100 (constantly true))
         state (scheduler/service-id->state marathon-scheduler service-id)]
     (is (= {:failed-instances [:failed-instances], :killed-instances [], :kill-info :kill-call-info} state))))
 
@@ -646,7 +646,7 @@
         current-time-str (utils/date-to-str current-time)
         marathon-api (Object.)
         marathon-scheduler (->MarathonScheduler marathon-api {} (fn [] nil) "/home/path/"
-                                                (atom {}) (atom {}) 60000 (constantly true))
+                                                (atom {}) (atom {}) {} 60000 (constantly true))
         make-instance (fn [service-id instance-id]
                         {:id instance-id
                          :service-id service-id})]
@@ -835,7 +835,7 @@
                (process-kill-instance-request marathon-api service-id instance-id {})))))))
 
 (deftest test-delete-app
-  (let [scheduler (->MarathonScheduler {} {} nil nil (atom {}) (atom {}) nil nil)]
+  (let [scheduler (->MarathonScheduler {} {} nil nil (atom {}) (atom {}) {} nil nil)]
 
     (with-redefs [marathon/delete-app (constantly {:deploymentId 12345})]
       (is (= {:result :deleted
