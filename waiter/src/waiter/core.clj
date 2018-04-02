@@ -813,8 +813,8 @@
                      scaling/scale-app service-id->service-description-fn router-state-push-mult)))
    :autoscaling-multiplexer (pc/fnk [[:routines delegate-instance-kill-request-fn peers-acknowledged-blacklist-requests-fn]
                                      [:settings [:scaling inter-kill-request-wait-time-ms] blacklist-config]
-                                     [:state instance-rpc-chan]
-                                     [:scheduler scheduler]]
+                                     [:scheduler scheduler]
+                                     [:state instance-rpc-chan]]
                               (scaling/service-scaling-multiplexer
                                 (fn scaling-executor-factory [service-id]
                                   (scaling/service-scaling-executor
