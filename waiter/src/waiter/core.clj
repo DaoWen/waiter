@@ -877,17 +877,17 @@
                                 {:exit-chan exit-chan
                                  :maintainer-chans maintainer-chan}))
    :scheduler-broken-services-gc (pc/fnk [[:curator gc-state-reader-fn gc-state-writer-fn leader?-fn]
+                                          [:scheduler scheduler]
                                           [:settings scheduler-gc-config]
                                           [:state clock]
-                                          [:scheduler scheduler]
                                           scheduler-maintainer]
                                    (let [scheduler-state-chan (async/tap (:scheduler-state-mult-chan scheduler-maintainer) (au/latest-chan))
                                          service-gc-go-routine (partial service-gc-go-routine gc-state-reader-fn gc-state-writer-fn leader?-fn clock)]
                                      (scheduler/scheduler-broken-services-gc scheduler scheduler-state-chan scheduler-gc-config service-gc-go-routine)))
    :scheduler-maintainer (pc/fnk [[:routines service-id->service-description-fn]
+                                  [:scheduler scheduler]
                                   [:settings [:health-check-config health-check-timeout-ms failed-check-threshold] scheduler-syncer-interval-secs]
-                                  [:state clock]
-                                  [:scheduler scheduler]]
+                                  [:state clock]]
                            (let [scheduler-state-chan (au/latest-chan)
                                  scheduler-state-mult-chan (async/mult scheduler-state-chan)
                                  http-client (http/client {:connect-timeout health-check-timeout-ms
@@ -899,9 +899,9 @@
                                :scheduler-state-mult-chan scheduler-state-mult-chan)))
    :scheduler-services-gc (pc/fnk [[:curator gc-state-reader-fn gc-state-writer-fn leader?-fn]
                                    [:routines router-metrics-helpers service-id->service-description-fn]
+                                   [:scheduler scheduler]
                                    [:settings scheduler-gc-config]
                                    [:state clock]
-                                   [:scheduler scheduler]
                                    scheduler-maintainer]
                             (let [scheduler-state-chan (async/tap (:scheduler-state-mult-chan scheduler-maintainer) (au/latest-chan))
                                   {:keys [service-id->metrics-fn]} router-metrics-helpers
@@ -1011,9 +1011,9 @@
                            {:body (io/input-stream (io/resource "web/favicon.ico"))
                             :content-type "image/png"}))
    :kill-instance-handler-fn (pc/fnk [[:routines peers-acknowledged-blacklist-requests-fn]
+                                      [:scheduler scheduler]
                                       [:settings [:scaling inter-kill-request-wait-time-ms] blacklist-config]
                                       [:state instance-rpc-chan]
-                                      [:scheduler scheduler]
                                       wrap-router-auth-fn]
                                (wrap-router-auth-fn
                                  (fn kill-instance-handler-fn [request]
@@ -1053,8 +1053,8 @@
                                       router-metrics-agent metrics-sync-interval-ms bytes-encryptor bytes-decryptor request))))
    :service-handler-fn (pc/fnk [[:curator kv-store]
                                 [:routines allowed-to-manage-service?-fn generate-log-url-fn make-inter-router-requests-sync-fn]
-                                [:state router-id]
                                 [:scheduler scheduler]
+                                [:state router-id]
                                 wrap-secure-request-fn]
                          (wrap-secure-request-fn
                            (fn service-handler-fn [{:as request {:keys [service-id]} :route-params}]

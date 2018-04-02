@@ -391,8 +391,8 @@
                        :routines {:allowed-to-manage-service?-fn allowed-to-manage-service?
                                   :generate-log-url-fn nil
                                   :make-inter-router-requests-sync-fn nil}
-                       :state {:router-id "router-id"}
                        :scheduler {:scheduler (Object.)}
+                       :state {:router-id "router-id"}
                        :wrap-secure-request-fn utils/wrap-identity}
         handlers {:service-handler-fn ((:service-handler-fn request-handlers) configuration)}]
     (testing "service-handler:delete-successful"
@@ -463,8 +463,8 @@
                        :routines {:allowed-to-manage-service?-fn (constantly true)
                                   :generate-log-url-fn (partial handler/generate-log-url #(str "http://www.example.com" %))
                                   :make-inter-router-requests-sync-fn nil}
-                       :state {:router-id "router-id"}
                        :scheduler {:scheduler (Object.)}
+                       :state {:router-id "router-id"}
                        :wrap-secure-request-fn utils/wrap-identity}
         handlers {:service-handler-fn ((:service-handler-fn request-handlers) configuration)}
         ring-handler (wrap-handler-json-response (ring-handler-factory waiter-request?-fn handlers))]
