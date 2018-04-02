@@ -500,12 +500,6 @@
                 (cond->> (utils/unique-identifier)
                          (not (str/blank? router-id-prefix))
                          (str (str/replace router-id-prefix #"[@.]" "-") "-")))
-   :scheduler (pc/fnk [[:settings scheduler-config]
-                       service-id-prefix]
-                (let [is-waiter-app?-fn
-                      (fn is-waiter-app? [^String service-id]
-                        (str/starts-with? service-id service-id-prefix))]
-                  (utils/create-component scheduler-config :context {:is-waiter-app?-fn is-waiter-app?-fn})))
    :scheduler-state-chan (pc/fnk [] (au/latest-chan))
    :service-description-builder (pc/fnk [[:settings service-description-builder-config service-description-constraints]]
                                   (when-let [unknown-keys (-> service-description-constraints
@@ -594,6 +588,25 @@
                          latch (LeaderLatch. curator leader-latch-path router-id)]
                      (.start latch)
                      latch))})
+
+(def scheduler
+  {:scheduler (pc/fnk [[:settings scheduler-config]
+                       [:state service-id-prefix]
+                       service-id->service-description-fn*]
+                      (let [is-waiter-app?-fn
+                            (fn is-waiter-app? [^String service-id]
+                              (str/starts-with? service-id service-id-prefix))]
+                        (utils/create-component scheduler-config :context {:is-waiter-app?-fn is-waiter-app?-fn
+                                                                           :service-id->service-description-fn service-id->service-description-fn*})))
+   ; This function is only included here for initializing the scheduler above.
+   ; Prefer accessing the non-starred version of this function through the routines map.
+   :service-id->service-description-fn* (pc/fnk [[:curator kv-store]
+                                                [:settings service-description-defaults metric-group-mappings]]
+                                               (fn service-id->service-description
+                                                 [service-id & {:keys [effective?] :or {effective? true}}]
+                                                 (sd/service-id->service-description
+                                                   kv-store service-id service-description-defaults
+                                                   metric-group-mappings :effective? effective?)))})
 
 (def routines
   {:allowed-to-manage-service?-fn (pc/fnk [[:curator kv-store]
@@ -730,14 +743,10 @@
                               (fn service-id->password [service-id]
                                 (log/debug "generating password for" service-id)
                                 (digest/md5 (str service-id (first passwords)))))
-   :service-id->service-description-fn (pc/fnk [[:curator kv-store]
-                                                [:settings service-description-defaults metric-group-mappings]]
-                                         (fn service-id->service-description
-                                           [service-id & {:keys [effective?] :or {effective? true}}]
-                                           (sd/service-id->service-description
-                                             kv-store service-id service-description-defaults
-                                             metric-group-mappings :effective? effective?)))
-   :start-new-service-fn (pc/fnk [[:state authenticator scheduler start-app-cache-atom task-threadpool]
+   :service-id->service-description-fn (pc/fnk [[:scheduler service-id->service-description-fn*]]
+                                               service-id->service-description-fn*)
+   :start-new-service-fn (pc/fnk [[:state authenticator start-app-cache-atom task-threadpool]
+                                  [:scheduler scheduler]
                                   service-id->password-fn store-service-description-fn]
                            (fn start-new-service [{:keys [service-id core-service-description] :as descriptor}]
                              (let [run-as-user (get-in descriptor [:service-description "run-as-user"])]
@@ -794,7 +803,7 @@
   {:autoscaler (pc/fnk [[:curator leader?-fn]
                         [:routines router-metrics-helpers service-id->service-description-fn]
                         [:settings [:scaling autoscaler-interval-ms]]
-                        [:state scheduler]
+                        [:scheduler scheduler]
                         autoscaling-multiplexer router-state-maintainer]
                  (let [service-id->metrics-fn (:service-id->metrics-fn router-metrics-helpers)
                        router-state-push-mult (get-in router-state-maintainer [:maintainer-chans :router-state-push-mult])
@@ -804,7 +813,8 @@
                      scaling/scale-app service-id->service-description-fn router-state-push-mult)))
    :autoscaling-multiplexer (pc/fnk [[:routines delegate-instance-kill-request-fn peers-acknowledged-blacklist-requests-fn]
                                      [:settings [:scaling inter-kill-request-wait-time-ms] blacklist-config]
-                                     [:state instance-rpc-chan scheduler]]
+                                     [:state instance-rpc-chan]
+                                     [:scheduler scheduler]]
                               (scaling/service-scaling-multiplexer
                                 (fn scaling-executor-factory [service-id]
                                   (scaling/service-scaling-executor
@@ -868,14 +878,16 @@
                                  :maintainer-chans maintainer-chan}))
    :scheduler-broken-services-gc (pc/fnk [[:curator gc-state-reader-fn gc-state-writer-fn leader?-fn]
                                           [:settings scheduler-gc-config]
-                                          [:state clock scheduler]
+                                          [:state clock]
+                                          [:scheduler scheduler]
                                           scheduler-maintainer]
                                    (let [scheduler-state-chan (async/tap (:scheduler-state-mult-chan scheduler-maintainer) (au/latest-chan))
                                          service-gc-go-routine (partial service-gc-go-routine gc-state-reader-fn gc-state-writer-fn leader?-fn clock)]
                                      (scheduler/scheduler-broken-services-gc scheduler scheduler-state-chan scheduler-gc-config service-gc-go-routine)))
    :scheduler-maintainer (pc/fnk [[:routines service-id->service-description-fn]
                                   [:settings [:health-check-config health-check-timeout-ms failed-check-threshold] scheduler-syncer-interval-secs]
-                                  [:state clock scheduler]]
+                                  [:state clock]
+                                  [:scheduler scheduler]]
                            (let [scheduler-state-chan (au/latest-chan)
                                  scheduler-state-mult-chan (async/mult scheduler-state-chan)
                                  http-client (http/client {:connect-timeout health-check-timeout-ms
@@ -888,7 +900,8 @@
    :scheduler-services-gc (pc/fnk [[:curator gc-state-reader-fn gc-state-writer-fn leader?-fn]
                                    [:routines router-metrics-helpers service-id->service-description-fn]
                                    [:settings scheduler-gc-config]
-                                   [:state clock scheduler]
+                                   [:state clock]
+                                   [:scheduler scheduler]
                                    scheduler-maintainer]
                             (let [scheduler-state-chan (async/tap (:scheduler-state-mult-chan scheduler-maintainer) (au/latest-chan))
                                   {:keys [service-id->metrics-fn]} router-metrics-helpers
@@ -999,7 +1012,8 @@
                             :content-type "image/png"}))
    :kill-instance-handler-fn (pc/fnk [[:routines peers-acknowledged-blacklist-requests-fn]
                                       [:settings [:scaling inter-kill-request-wait-time-ms] blacklist-config]
-                                      [:state instance-rpc-chan scheduler]
+                                      [:state instance-rpc-chan]
+                                      [:scheduler scheduler]
                                       wrap-router-auth-fn]
                                (wrap-router-auth-fn
                                  (fn kill-instance-handler-fn [request]
@@ -1039,7 +1053,8 @@
                                       router-metrics-agent metrics-sync-interval-ms bytes-encryptor bytes-decryptor request))))
    :service-handler-fn (pc/fnk [[:curator kv-store]
                                 [:routines allowed-to-manage-service?-fn generate-log-url-fn make-inter-router-requests-sync-fn]
-                                [:state router-id scheduler]
+                                [:state router-id]
+                                [:scheduler scheduler]
                                 wrap-secure-request-fn]
                          (wrap-secure-request-fn
                            (fn service-handler-fn [{:as request {:keys [service-id]} :route-params}]
@@ -1093,7 +1108,7 @@
                                      (handler/suspend-or-resume-service-handler
                                        kv-store allowed-to-manage-service?-fn make-inter-router-requests-sync-fn service-id :suspend request))))
    :service-view-logs-handler-fn (pc/fnk [[:routines generate-log-url-fn]
-                                          [:state scheduler]
+                                          [:scheduler scheduler]
                                           wrap-secure-request-fn]
                                    (wrap-secure-request-fn
                                      (fn service-view-logs-handler-fn [{:as request {:keys [service-id]} :route-params}]
