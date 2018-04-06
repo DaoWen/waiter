@@ -55,4 +55,4 @@ curl -s ${WAITER_URI}/settings | jq .port
 
 # Run the integration tests
 cd ${WAITER_DIR}
-lein with-profiles +test-log test :integration-slow
+lein with-profiles +test-log parallel-test :integration-slow
