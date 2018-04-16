@@ -276,6 +276,11 @@
                                                 :spnego-auth true}
                                  :force-kill-after-ms 60000
                                  :framework-id-ttl 900000}
+                      :kubernetes {:factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
+                                   :http-options {:conn-timeout 10000
+                                                  :socket-timeout 10000}
+                                   :force-kill-after-ms 60000
+                                   :framework-id-ttl 900000}
                       :shell {:factory-fn 'waiter.scheduler.shell/shell-scheduler
                               :failed-instance-retry-interval-ms 5000
                               :health-check-interval-ms 5000
