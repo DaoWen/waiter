@@ -51,23 +51,23 @@
               (condp = channel
                 executor-multiplexer-chan
                 (let [{:keys [service-id scale-amount correlation-id] :as scaling-data} data]
-                  (cid/with-correlation-id
-                    correlation-id
-                    (log/info "service-scaling-multiplexer received" {:service-id service-id :scale-amount scale-amount})
-                    (let [service-id->scaling-executor-chan
+                  (log/info "service-scaling-multiplexer received" {:service-id service-id :scale-amount scale-amount})
+                  (let [service-id->scaling-executor-chan
+                        (cid/with-correlation-id
+                          correlation-id
                           (cond-> service-id->scaling-executor-chan
-                                  (not (get service-id->scaling-executor-chan service-id))
-                                  (assoc service-id (scaling-executor-factory service-id)))
-                          {:keys [executor-chan]} (get service-id->scaling-executor-chan service-id)]
-                      (if scale-amount
-                        (do
-                          (log/info "sending" service-id "executor to scale by" scale-amount "instances")
-                          (async/>! executor-chan scaling-data)
-                          service-id->scaling-executor-chan)
-                        (do
-                          (log/info "shutting down scaling executor channel for" service-id)
-                          (async/close! executor-chan)
-                          (dissoc service-id->scaling-executor-chan service-id))))))
+                            (not (get service-id->scaling-executor-chan service-id))
+                            (assoc service-id (scaling-executor-factory service-id))))
+                        {:keys [executor-chan]} (get service-id->scaling-executor-chan service-id)]
+                    (if scale-amount
+                      (do
+                        (log/info "sending" service-id "executor to scale by" scale-amount "instances")
+                        (async/>! executor-chan scaling-data)
+                        service-id->scaling-executor-chan)
+                      (do
+                        (log/info "shutting down scaling executor channel for" service-id)
+                        (async/close! executor-chan)
+                        (dissoc service-id->scaling-executor-chan service-id)))))
 
                 query-chan
                 (let [{:keys [response-chan service-id]} data]
@@ -105,23 +105,27 @@
    num-instances-to-kill response-chan]
   (let [{:keys [blacklist-backoff-base-time-ms inter-kill-request-wait-time-ms max-blacklist-time-ms]} timeout-config]
     (async/go
-      (cid/with-correlation-id
-        correlation-id
-        (try
-          (let [request-id (utils/unique-identifier) ; new unique identifier for this reservation request
-                reason-map-fn (fn [] {:cid correlation-id :reason :kill-instance :request-id request-id :time (t/now)})
-                result-map-fn (fn [status] {:cid correlation-id :request-id request-id :status status})]
-            (log/info "requested to scale down by" num-instances-to-kill "but will attempt to kill only one instance")
-            (timers/start-stop-time!
-              (metrics/service-timer service-id "kill-instance")
-              (loop [exclude-ids-set #{}]
-                (let [instance (service/get-rand-inst instance-rpc-chan service-id (reason-map-fn) exclude-ids-set inter-kill-request-wait-time-ms)]
-                  (if-let [instance-id (:id instance)]
-                    (if (peers-acknowledged-blacklist-requests-fn instance true blacklist-backoff-base-time-ms :prepare-to-kill)
-                      (do
+      (try
+        (let [request-id (utils/unique-identifier) ; new unique identifier for this reservation request
+              reason-map-fn (fn [] {:cid correlation-id :reason :kill-instance :request-id request-id :time (t/now)})
+              result-map-fn (fn [status] {:cid correlation-id :request-id request-id :status status})]
+          (log/info "requested to scale down by" num-instances-to-kill "but will attempt to kill only one instance")
+          (timers/start-stop-time!
+            (metrics/service-timer service-id "kill-instance")
+            (loop [exclude-ids-set #{}]
+              (let [instance (service/get-rand-inst instance-rpc-chan service-id (reason-map-fn) exclude-ids-set inter-kill-request-wait-time-ms)]
+                (if-let [instance-id (:id instance)]
+                  (if (peers-acknowledged-blacklist-requests-fn instance true blacklist-backoff-base-time-ms :prepare-to-kill)
+                    (do
+                      (cid/with-correlation-id
+                        correlation-id
                         (log/info "scaling down instance candidate" instance)
-                        (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "attempt"))
-                        (let [{:keys [killed?] :as kill-result} (scheduler/kill-instance scheduler instance)]
+                        (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "attempt")))
+                      (let [{:keys [killed?] :as kill-result} (cid/with-correlation-id
+                                                                correlation-id
+                                                                (scheduler/kill-instance scheduler instance))]
+                        (cid/with-correlation-id
+                          correlation-id
                           (if killed?
                             (do
                               (log/info "marking instance" instance-id "as killed")
@@ -132,20 +136,25 @@
                             (do
                               (log/info "failed kill attempt, releasing instance" instance-id)
                               (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "kill-fail"))
-                              (service/release-instance! instance-rpc-chan instance (result-map-fn :not-killed))))
-                          (when response-chan (async/>! response-chan kill-result))
-                          killed?))
-                      (do
+                              (service/release-instance! instance-rpc-chan instance (result-map-fn :not-killed)))))
+                        (when response-chan (async/>! response-chan kill-result))
+                        killed?))
+                    (do
+                      (cid/with-correlation-id
+                        correlation-id
                         (log/info "kill was vetoed, releasing instance" instance-id)
                         (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "vetoed-instance"))
-                        (service/release-instance! instance-rpc-chan instance (result-map-fn :not-killed))
-                        ;; make best effort to find another instance that is not veto-ed
-                        (recur (conj exclude-ids-set instance-id))))
-                    (do
-                      (log/info "no instance available to kill")
-                      (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "unavailable"))
-                      false))))))
-          (catch Exception ex
+                        (service/release-instance! instance-rpc-chan instance (result-map-fn :not-killed)))
+                      ;; make best effort to find another instance that is not veto-ed
+                      (recur (conj exclude-ids-set instance-id))))
+                  (cid/with-correlation-id
+                    correlation-id
+                    (log/info "no instance available to kill")
+                    (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "unavailable"))
+                    false))))))
+        (catch Exception ex
+          (cid/with-correlation-id
+            correlation-id
             (counters/inc! (metrics/service-counter service-id "scaling" "scale-down" "fail"))
             (log/error ex "unable to scale down service" service-id)))))))
 

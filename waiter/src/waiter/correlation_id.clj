@@ -34,18 +34,18 @@
 
 ; The value of UNKNOWN should never be used, correlation-id should be dynamically bound in the with-correlation-id body.
 (def default-correlation-id "UNKNOWN")
-(def ^:dynamic dynamic-correlation-id default-correlation-id)
+(def ^:dynamic *dynamic-correlation-id* default-correlation-id)
 
 (defmacro with-correlation-id
   "Executes the body with the specified value of correlation-id."
   [correlation-id & body]
-  `(binding [dynamic-correlation-id ~correlation-id]
+  `(binding [*dynamic-correlation-id* ~correlation-id]
      ~@body))
 
 (defn get-correlation-id
   "Retrieve the value of the current correlation-id."
   []
-  dynamic-correlation-id)
+  *dynamic-correlation-id*)
 
 
 (defmacro correlation-id->str

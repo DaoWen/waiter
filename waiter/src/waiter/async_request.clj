@@ -44,11 +44,11 @@
    The request is forcefully completed at timeout."
   [make-http-request complete-async-request request-still-active? status-endpoint check-interval-ms request-timeout-ms correlation-id exit-chan]
   (async/go
-    (cid/with-correlation-id
-      (str correlation-id "|status-check")
+    (let [status-check-cid (str correlation-id "|status-check")]
       (loop [ttl request-timeout-ms]
         (if-not (pos? ttl)
-          (do
+          (cid/with-correlation-id
+            status-check-cid
             (log/info "request has timed out, releasing allocated instance")
             (complete-async-request :success)
             :monitor-timed-out)
@@ -56,14 +56,16 @@
                 [message trigger-chan] (async/alts! [exit-chan timeout-chan] :priority true)
                 continue-looping (if (= trigger-chan timeout-chan) (request-still-active?) (not= message :exit))]
             (if-not continue-looping
-              (do
+              (cid/with-correlation-id
+                status-check-cid
                 (log/info "request has been cleared from store, exiting monitoring loop")
                 (complete-async-request :success)
                 (if (= trigger-chan exit-chan) :request-terminated :request-no-longer-active))
-              (let [{:keys [body headers error status]} (async/<! (make-http-request))]
+              (let [{:keys [body headers error status]} (async/<! (cid/with-correlation-id status-check-cid (make-http-request)))]
                 (when body (async/close! body))
                 (if error
-                  (do
+                  (cid/with-correlation-id
+                    status-check-cid
                     (condp instance? error
                       ConnectException (log/debug error "error in performing status check")
                       SocketTimeoutException (log/debug error "timeout in performing status check")
@@ -84,16 +86,19 @@
                             location (normalize-location-header status-endpoint location-header)]
                         (if (str/starts-with? (str location) "/")
                           (recur (max 0 (- ttl check-interval-ms)))
-                          (do
+                          (cid/with-correlation-id
+                            status-check-cid
                             (log/info "completing async request as result location is not a relative path:" location)
                             (complete-async-request :success)
                             :status-see-other))))
                     410
-                    (do
+                    (cid/with-correlation-id
+                      status-check-cid
                       (log/info "async request has completed, result is no longer available!")
                       (complete-async-request :success)
                       :status-gone)
-                    (do
+                    (cid/with-correlation-id
+                      status-check-cid
                       (log/warn "status check returned unsupported status" status ", releasing reserved instance")
                       (complete-async-request :success)
                       :unknown-status-code)))))))))))
