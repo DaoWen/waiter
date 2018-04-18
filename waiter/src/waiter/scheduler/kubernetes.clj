@@ -25,7 +25,6 @@
   (:import (org.joda.time.format DateTimeFormat)))
 
 (def service-id->failed-instances-transient-store (atom {}))
-(def instance-x->failed-instances-transient-store (atom {}))
 (def k8s-api-auth-str (atom nil))
 
 ;; XXX - this shouldn't be a global constant (it should be read from the config file)
@@ -87,39 +86,30 @@
          service-id (get-in pod [:metadata :annotations :waiter/service-id])]
      (str service-id \. instance-suffix \- restart-count))))
 
+(defn- killed-by-k8s? [pod-terminated-info]
+  ;; TODO - Look at events for messages about liveness probe failures:
+  ;; /api/v1/namespaces/<ns>/events?fieldSelector=involvedObject.namespace=<ns>,involvedObject.name=<instance-id>,reason=Unhealthy
+  ;; (-> event :message (string/starts-with? "Liveness probe failed:")) #{:never-passed-health-checks}
+  ;; For now, we just assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
+  (and (= 137 (:exitCode pod-terminated-info))
+       (= "Error" (:reason pod-terminated-info))))
+
 (defn- track-failed-instances [live-instance pod]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
-    (let [service-id (:service-id live-instance)
-          instance-id (:id live-instance)
-          instance-x (pod->instance-id pod \X)
+    (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
           newest-failure-start-time (-> newest-failure :startedAt timestamp-str->datetime)
-          failures (-> instance-x->failed-instances-transient-store
-                       deref (get instance-x))
-          prev-failure-start-time (some-> failures last :started-at)]
-      ;; FIXME - this is racey! we can end up reporting the same failed instances twice.
-      (when (or (nil? prev-failure-start-time)
-                (neg? (compare prev-failure-start-time newest-failure-start-time)))
-        (let [failure-flags (cond
-                              (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded}
-                              :else #{})
-              ;; TODO - Look at events for messages about liveness probe failures:
-              ;; /api/v1/namespaces/<ns>/events?fieldSelector=involvedObject.namespace=<ns>,involvedObject.name=<instance-id>,reason=Unhealthy
-              ;; (-> event :message (string/starts-with? "Liveness probe failed:")) #{:never-passed-health-checks}
-              ;; For now, we just assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
-              killed-by-k8s? (and (= 137 (:exitCode newest-failure))
-                                  (= "Error" (:reason newest-failure)))
-              newest-failure-instance (merge live-instance
-                                             ; to match the behavior of the marathon scheduler,
-                                             ; don't include the exit code in failed instances that were killed by k8s
-                                             (when-not killed-by-k8s?
-                                               {:exit-code (:exitCode newest-failure)})
-                                             {:flags failure-flags
-                                              :healthy? false
-                                              :id (pod->instance-id pod (count failures))
-                                              :started-at newest-failure-start-time})]
-          (doseq [[id store] [[service-id service-id->failed-instances-transient-store]
-                              [instance-x instance-x->failed-instances-transient-store]]]
-            (swap! store update-in [id] (comp vec conj) newest-failure-instance)))))))
+          restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
+          newest-failure-instance (merge live-instance
+                                         ; to match the behavior of the marathon scheduler,
+                                         ; don't include the exit code in failed instances that were killed by k8s
+                                         (when-not (killed-by-k8s? newest-failure)
+                                           {:exit-code (:exitCode newest-failure)})
+                                         {:flags failure-flags
+                                          :healthy? false
+                                          :id (pod->instance-id pod (dec restart-count))
+                                          :started-at newest-failure-start-time})]
+      (swap! service-id->failed-instances-transient-store
+             update-in [(:service-id live-instance)] (comp vec conj) newest-failure-instance))))
 
 (defn- pod->ServiceInstance
   [pod]
@@ -456,8 +446,7 @@
      :killed-instances (scheduler/service-id->killed-instances service-id)})
 
   (state [_]
-    {:service-id->failed-instances @service-id->failed-instances-transient-store
-     :instance-x->failed-instances @instance-x->failed-instances-transient-store}))
+    {:service-id->failed-instances @service-id->failed-instances-transient-store}))
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
