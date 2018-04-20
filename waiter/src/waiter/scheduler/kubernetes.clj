@@ -75,7 +75,6 @@
         started (:replicas replicaset-status 0)
         available (:availableReplicas replicaset-status 0)
         unavailable (:unavailableReplicas replicaset-status 0)]
-    (log/info "ReplicaSet info" replicaset)
     (scheduler/make-Service
       {:app-name (get-in replicaset [:metadata :name])
        :id (get-in replicaset [:metadata :annotations :waiter/service-id])
@@ -145,14 +144,12 @@
 (defn- api-request
   [client url & {:keys [body content-type] :as options}]
   (ss/try+
-    (log/info "K8s API request:" url options)
     (let [auth-str @k8s-api-auth-str
           result (pc/mapply mesos-utils/http-request client url
                             :accept "application/json"
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
                               (and (not content-type ) body) (assoc :content-type "application/json")))]
-      (log/info "K8s API result:" result)
       result)
     (catch [:status 400] _
       (log/error "malformed request: " url options))))
@@ -221,7 +218,6 @@
 
 (defn- scale-service-to
   [api-server-url http-client service instances']
-  (log/info "Scaling to " instances' service)
   (let [request-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
                          (:namespace service)
@@ -232,7 +228,6 @@
 
 (defn- scale-service-by
   [api-server-url http-client service instances-delta]
-  (log/info "Scaling incrementally by " instances-delta service)
   (let [request-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
                          (:namespace service)
@@ -313,7 +308,6 @@
 
 (defn- create-service
   [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
-  (log/info "Creating service" service-id "with description" descriptor)
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec service-id service-description scheduler service-id->password-fn)
         request-url (str api-server-url
@@ -367,10 +361,8 @@
 
   (get-apps->instances [this]
     (let [apps (get-services this)
-          _ (log/info "apps =" apps)
           app->app+instances #(service+instances % this)
-          app->instances (into {} (mapv app->app+instances apps))
-          _ (log/info "apps->instances =" app->instances)]
+          app->instances (into {} (mapv app->app+instances apps))]
       app->instances))
 
   (get-apps [this]
@@ -403,11 +395,9 @@
         (log/warn "app-exists?: service" service-id "does not exist!"))))
 
   (create-app-if-new [this service-id->password-fn descriptor]
-    (log/info "Try starting new app with descriptor" descriptor)
     (let [service-id (:service-id descriptor)]
       (when-not (scheduler/app-exists? this service-id)
         (ss/try+
-          (log/info "Starting new app for" service-id "with descriptor" (dissoc descriptor :env))
           (create-service service-id descriptor this service-id->password-fn)
           (catch [:status 409] e
             (log/warn (ex-info "Conflict status when trying to start app. Is app starting up?"
