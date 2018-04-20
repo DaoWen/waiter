@@ -24,21 +24,30 @@
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
-(def service-id->failed-instances-transient-store (atom {}))
 (def k8s-api-auth-str (atom nil))
 
-;; XXX - this shouldn't be a global constant (it should be read from the config file)
-(def k8s-name-length-limit 63)
-
-(def k8s-timestamp-format (DateTimeFormat/forPattern "yyyy-MM-dd'T'HH:mm:ss'Z'"))
+(def k8s-timestamp-format
+  "Kubernetes reports dates in ISO8061 format, sans the milliseconds component."
+  (DateTimeFormat/forPattern "yyyy-MM-dd'T'HH:mm:ss'Z'"))
 
 (defn- timestamp-str->datetime [k8s-timestamp-str]
   (utils/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
-(defn- service-id->app-name [service-id]
+(defn- use-short-service-hash? [app-name-max-length]
+  ;; This is fairly arbitrary, but if we have at least 48 characters for the app name,
+  ;; then we can fit the full 32 character service-id hash, plus a hyphen as a separator,
+  ;; and still have 25 characters left for some prefix of the app name.
+  ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
+  (< app-name-max-length 48))
+
+(def pod-unique-suffix-length
+  "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
+  5)
+
+(defn- service-id->app-name [service-id {:keys [name-max-length] :as scheduler}]
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
-        app-name-max-length (- k8s-name-length-limit 6)
-        suffix (if (< app-name-max-length 48)
+        app-name-max-length (- name-max-length pod-unique-suffix-length 1)
+        suffix (if (use-short-service-hash? app-name-max-length)
                  (str \- x z)
                  (str \- x y z))
         prefix-max-length (- app-name-max-length (count suffix))
@@ -82,7 +91,7 @@
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
   ([pod restart-count]
    (let [pod-name (get-in pod [:metadata :name])
-         instance-suffix (subs pod-name (- (count pod-name) 5))
+         instance-suffix (subs pod-name (- (count pod-name) pod-unique-suffix-length))
          service-id (get-in pod [:metadata :annotations :waiter/service-id])]
      (str service-id \. instance-suffix \- restart-count))))
 
@@ -94,7 +103,7 @@
   (and (= 137 (:exitCode pod-terminated-info))
        (= "Error" (:reason pod-terminated-info))))
 
-(defn- track-failed-instances [live-instance pod]
+(defn- track-failed-instances [live-instance pod scheduler]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
     (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
           newest-failure-start-time (-> newest-failure :startedAt timestamp-str->datetime)
@@ -108,7 +117,7 @@
                                           :healthy? false
                                           :id (pod->instance-id pod (dec restart-count))
                                           :started-at newest-failure-start-time})]
-      (swap! service-id->failed-instances-transient-store
+      (swap! (:service-id->failed-instances-transient-store scheduler)
              update-in [(:service-id live-instance)] (comp vec conj) newest-failure-instance))))
 
 (defn- pod->ServiceInstance
@@ -171,21 +180,21 @@
        :items))
 
 (defn- get-service-instances
-  [api-server-url http-client service]
+  [service {:keys [api-server-url http-client] :as scheduler}]
   (vec (for [pod (get-replicaset-pods api-server-url http-client service)
              :let [service-instance (pod->ServiceInstance pod)]
              :when (:host service-instance)]
          (doto service-instance
-           (track-failed-instances pod)))))
+           (track-failed-instances pod scheduler)))))
 
 (defn- instances-breakdown
-  [api-server-url http-client service]
-  {:active-instances (get-service-instances api-server-url http-client service)
+  [service {:keys [service-id->failed-instances-transient-store] :as scheduler}]
+  {:active-instances (get-service-instances service scheduler)
    :failed-instances (get @service-id->failed-instances-transient-store (:id service) [])})
 
 (defn- service+instances
-  [api-server-url http-client service]
-  (let [instances (instances-breakdown api-server-url http-client service)]
+  [service scheduler]
+  (let [instances (instances-breakdown service scheduler)]
     [service instances]))
 
 (defn- patch-object-json
@@ -251,7 +260,7 @@
     (make-kill-response true "pod was killed" 200)))
 
 (defn- service-spec
-  [service-id service-description service-id->password-fn]
+  [service-id service-description scheduler service-id->password-fn]
   (let [spec-file-path "./specs/k8s-default-pod.edn" ; TODO - allow user to provide this via the config file
         {:strs [backend-proto cmd cpus #_disk grace-period-secs health-check-interval-secs
                 health-check-max-consecutive-failures mem ports min-instances
@@ -267,7 +276,7 @@
                                {:name k, :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i), :value (str (+ port0 i))})))
-        params {:app-name (service-id->app-name service-id)
+        params {:app-name (service-id->app-name service-id scheduler)
                 :backend-protocol backend-proto
                 :backend-protocol-caps (string/upper-case backend-proto)
                 :cmd cmd
@@ -297,10 +306,10 @@
     (->> spec-file-path slurp (edn/read-string edn-opts))))
 
 (defn- create-service
-  [api-server-url http-client service-id descriptor service-id->password-fn]
+  [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
   (log/info "Creating service" service-id "with description" descriptor)
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
-        spec-json (service-spec service-id service-description service-id->password-fn)
+        spec-json (service-spec service-id service-description scheduler service-id->password-fn)
         request-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
                          (service-description->namespace service-description)
@@ -331,13 +340,13 @@
      :message (str "K8s deleted ReplicaSet " (:app-name service))}))
 
 (defn- service-id->service
-  [{:keys [api-server-url http-client service-id->service-description-fn]} service-id]
+  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
   (let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)
         replicasets (->> (str api-server-url
                               "/apis/extensions/v1beta1/namespaces/"
                               service-ns
                               "/replicasets?labelSelector=managed-by=waiter,app="
-                              (service-id->app-name service-id))
+                              (service-id->app-name service-id scheduler))
                          (api-request http-client)
                          :items)]
     (when (seq replicasets)
@@ -345,23 +354,25 @@
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
+                                name-max-length
+                                service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
   scheduler/ServiceScheduler
 
-  (get-apps->instances [_]
-    (let [apps (get-services api-server-url http-client)
+  (get-apps->instances [this]
+    (let [apps (get-services this)
           _ (log/info "apps =" apps)
-          app->app+instances (partial service+instances api-server-url http-client)
+          app->app+instances #(service+instances % this)
           app->instances (into {} (mapv app->app+instances apps))
           _ (log/info "apps->instances =" app->instances)]
       app->instances))
 
-  (get-apps [_]
-    (get-services api-server-url http-client))
+  (get-apps [this]
+    (get-services this))
 
   (get-instances [this service-id]
     (let [service (service-id->service this service-id)]
-      (instances-breakdown api-server-url http-client service)))
+      (instances-breakdown service this)))
 
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
@@ -391,7 +402,7 @@
       (when-not (scheduler/app-exists? this service-id)
         (ss/try+
           (log/info "Starting new app for" service-id "with descriptor" (dissoc descriptor :env))
-          (create-service api-server-url http-client service-id descriptor service-id->password-fn)
+          (create-service service-id descriptor this service-id->password-fn)
           (catch [:status 409] e
             (log/warn (ex-info "Conflict status when trying to start app. Is app starting up?"
                                {:descriptor descriptor
@@ -456,7 +467,9 @@
   {:pre [(utils/pos-int? framework-id-ttl)
          (utils/pos-int? (:conn-timeout http-options))
          (utils/pos-int? (:socket-timeout http-options))]}
-  (let [http-client (mesos-utils/http-client-factory http-options)]
+  (let [http-client (mesos-utils/http-client-factory http-options)
+        name-max-length 63
+        service-id->failed-instances-transient-store (atom {})]
     (when authentication
       (let [refresh-fn (-> authentication :refresh-fn utils/resolve-symbol deref)
             auth-update-fn (fn auth-update []
@@ -469,4 +482,6 @@
               t/minutes
               (utils/start-timer-task auth-update-fn)))))
     (->KubernetesScheduler url http-client
+                           name-max-length
+                           service-id->failed-instances-transient-store
                            service-id->service-description-fn)))
