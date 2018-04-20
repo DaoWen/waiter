@@ -162,12 +162,18 @@
   (get service-description "run-as-user"))
 
 (defn- get-services
-  [api-server-url http-client]
-  (->> (str api-server-url
-            "/apis/extensions/v1beta1/replicasets?labelSelector=managed-by=waiter")
-       (api-request http-client)
-       :items
-       (mapv replicaset->Service)))
+  [{:keys [api-server-url http-client namespaces-fn] :as scheduler}]
+  (let [query-url-prefix (str api-server-url "/apis/extensions/v1beta1")
+        query-url-suffix "/replicasets?labelSelector=managed-by=waiter"
+        query-urls (if namespaces-fn
+                     (for [n (namespaces-fn)]
+                       (str query-url-prefix "/namespaces/" n query-url-suffix))
+                     [(str query-url-prefix query-url-suffix)])]
+    (vec
+      (for [query-url query-urls
+            item (->> query-url (api-request http-client) :items)]
+        (replicaset->Service item)))))
+
 
 (defn- get-replicaset-pods
   [api-server-url http-client {:keys [app-name namespace] :as service}]
