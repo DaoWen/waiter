@@ -78,7 +78,7 @@
     (scheduler/make-Service
       {:app-name (get-in replicaset [:metadata :name])
        :id (get-in replicaset [:metadata :annotations :waiter/service-id])
-       :instances ready
+       :instances started
        :namespace (get-in replicaset [:metadata :namespace])
        :task-count requested
        :task-stats {:running ready
