@@ -157,7 +157,10 @@
       (k8s-log "Response from K8s API server:" (as-json result))
       result)
     (catch [:status 400] _
-      (log/error "malformed request: " url options))))
+      (log/error "malformed request: " url options))
+    (catch [:client client] response
+      (log/error "Request to K8s API server failed: " url options body response)
+      (ss/throw+ response))))
 
 (defn- service-description->namespace
   [service-description]
