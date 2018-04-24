@@ -24,6 +24,9 @@
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
+(defmacro k8s-log [& args]
+  `(log/log "Kubernetes" :debug nil (print-str ~@args)))
+
 (def k8s-api-auth-str (atom nil))
 
 (def k8s-timestamp-format
@@ -142,7 +145,8 @@
                      (timestamp-str->datetime))})))
 
 (defn- api-request
-  [client url & {:keys [body content-type] :as options}]
+  [client url & {:keys [body content-type request-method] :as options}]
+  (k8s-log "Making request to K8s API server:" url request-method body)
   (ss/try+
     (let [auth-str @k8s-api-auth-str
           result (pc/mapply mesos-utils/http-request client url
@@ -150,6 +154,7 @@
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
                               (and (not content-type ) body) (assoc :content-type "application/json")))]
+      (k8s-log "Response from K8s API server:" (as-json result))
       result)
     (catch [:status 400] _
       (log/error "malformed request: " url options))))
