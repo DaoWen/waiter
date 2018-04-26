@@ -278,7 +278,7 @@
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
         port0 8080
-        template-env (into [{:name "MESOS_DIR", :value home-path}
+        template-env (into [{:name "MESOS_DIRECTORY", :value home-path}
                             {:name "MESOS_SANDBOX", :value home-path}]
                            (concat
                              (for [[k v] common-env]
