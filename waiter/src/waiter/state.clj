@@ -782,8 +782,14 @@
        (remove (comp removed-service-ids :service-id))
        (concat (mapv new-tracker-val new-service-ids))
        (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timers starting-instance-trackers]}]
-               (let [healthy-instance-ids (->> service-id service-id->healthy-instances (map :id) set)
-                     known-instance-ids' (->> service-id service-id->unhealthy-instances (map :id) (into healthy-instance-ids))
+               (let [healthy-instance-ids (->> service-id
+                                               (get service-id->healthy-instances)
+                                               (map :id)
+                                               set)
+                     known-instance-ids' (->> service-id
+                                              (get service-id->unhealthy-instances)
+                                              (map :id)
+                                              (into healthy-instance-ids))
                      new-instance-ids (set/difference known-instance-ids' known-instance-ids)
                      ;; Pair up all of the newly-scheduled instances with their timers.
                      ;; NOTE: Using split-at allows us to drop the new-instances if we're somehow missing the corresponding timers
