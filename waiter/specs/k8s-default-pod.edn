@@ -1,25 +1,22 @@
 {:kind "ReplicaSet"
  :apiVersion "extensions/v1beta1"
- :metadata {:name #waiter/param :app-name
-            :labels {:app #waiter/param :app-name
+ :metadata {:name #waiter/param :k8s-name
+            :labels {:app #waiter/param :k8s-name
                      :managed-by "waiter"}
             :annotations {:waiter/app-status "live"
                           :waiter/service-id #waiter/param :service-id}}
  :spec {:replicas #waiter/param :min-instances
-        :selector {:matchLabels {:app #waiter/param :app-name
+        :selector {:matchLabels {:app #waiter/param :k8s-name
                                  :managed-by "waiter"}}
-        :template {:metadata {:labels {:app #waiter/param :app-name
+        :template {:metadata {:labels {:app #waiter/param :k8s-name
                                        :managed-by "waiter"}
-                              :annotations {
-                                            :waiter/port-count #waiter/param-str :port-count
+                              :annotations {:waiter/port-count #waiter/param-str :port-count
                                             :waiter/protocol #waiter/param :backend-protocol
                                             :waiter/service-id #waiter/param :service-id}}
-                   :spec {:containers [{:name #waiter/param :app-name
+                   :spec {:containers [{:name #waiter/param :k8s-name
                                         :command ["/bin/sh" "-c" #waiter/param :cmd]
                                         :env #waiter/param :env
                                         :image "daowen/waiter-kitchen:latest"
-                                        :ports [{:containerPort #waiter/port 0}]
-                                        ;; XXX - I'd rather not have both probe types
                                         :livenessProbe {:httpGet {:path #waiter/param :health-check-url
                                                                   :port #waiter/port 0
                                                                   :scheme #waiter/param :backend-protocol-caps}
@@ -27,7 +24,7 @@
                                                         :initialDelaySeconds #waiter/param :grace-period-secs
                                                         :periodSeconds #waiter/param :health-check-interval-secs
                                                         :timeoutSeconds 1}
-                                        ;; XXX - I'd rather not have both probe types
+                                        :ports [{:containerPort #waiter/port 0}]
                                         :readinessProbe {:httpGet {:path #waiter/param :health-check-url
                                                                    :port #waiter/port 0
                                                                    :scheme #waiter/param :backend-protocol-caps}
