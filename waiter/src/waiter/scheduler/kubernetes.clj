@@ -21,6 +21,7 @@
             [waiter.mesos.utils :as mesos-utils]
             [waiter.scheduler :as scheduler]
             [waiter.service-description :as sd]
+            [waiter.util.date-utils :as du]
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
@@ -34,7 +35,7 @@
   (DateTimeFormat/forPattern "yyyy-MM-dd'T'HH:mm:ss'Z'"))
 
 (defn- timestamp-str->datetime [k8s-timestamp-str]
-  (utils/str-to-date k8s-timestamp-str k8s-timestamp-format))
+  (du/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
 (defn- use-short-service-hash? [app-name-max-length]
   ;; This is fairly arbitrary, but if we have at least 48 characters for the app name,
@@ -484,7 +485,7 @@
           (assert (utils/pos-int? refresh-delay-minutes))
           (-> refresh-delay-minutes
               t/minutes
-              (utils/start-timer-task auth-update-fn)))))
+              (du/start-timer-task auth-update-fn)))))
     (->KubernetesScheduler url http-client
                            name-max-length
                            service-id->failed-instances-transient-store
