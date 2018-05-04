@@ -58,7 +58,7 @@
         app-prefix' (cond-> app-prefix
                       (< prefix-max-length (count app-prefix))
                       (subs 0 prefix-max-length))]
-      (str app-prefix' suffix)))
+    (str app-prefix' suffix)))
 
 (defn- kw->str
   "Convert a keyword to a string, preserving the keyword's namespace (if any)."
@@ -80,14 +80,14 @@
         available (:availableReplicas replicaset-status 0)
         unavailable (:unavailableReplicas replicaset-status 0)]
     (scheduler/make-Service
-      {:app-name (get-in replicaset [:metadata :name])
+      {:k8s-name (get-in replicaset [:metadata :name])
        :id (get-in replicaset [:metadata :annotations :waiter/service-id])
        :instances started
        :namespace (get-in replicaset [:metadata :namespace])
        :task-count requested
-       :task-stats {:running ready
+       :task-stats {:healthy available
+                    :running ready
                     :staged (- requested ready)
-                    :healthy available
                     :unhealthy unavailable}})))
 
 (defn- pod->instance-id
@@ -127,23 +127,23 @@
   [pod]
   ;; FIXME - catch exceptions and return nil
   (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
-  (scheduler/make-ServiceInstance
-    {:app-name (get-in pod [:metadata :labels :app])
-     :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
-                       Integer/parseInt range next (mapv #(+ port0 %)))
-     :healthy? (get-in pod [:status :containerStatuses 0 :ready])
-     :host (get-in pod [:status :podIP])
-     :id (pod->instance-id pod)
-     :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
-     :namespace (get-in pod [:metadata :namespace])
-     :pod-name (get-in pod [:metadata :name])
-     :port port0
-     :protocol (get-in pod [:metadata :annotations :waiter/protocol])
-     :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
-     :service-id (get-in pod [:metadata :annotations :waiter/service-id])
-     :started-at (-> pod
-                     (get-in [:metadata :creationTimestamp])
-                     (timestamp-str->datetime))})))
+    (scheduler/make-ServiceInstance
+      {:k8s-name (get-in pod [:metadata :labels :app])
+       :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
+                         Integer/parseInt range next (mapv #(+ port0 %)))
+       :healthy? (get-in pod [:status :containerStatuses 0 :ready])
+       :host (get-in pod [:status :podIP])
+       :id (pod->instance-id pod)
+       :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
+       :namespace (get-in pod [:metadata :namespace])
+       :pod-name (get-in pod [:metadata :name])
+       :port port0
+       :protocol (get-in pod [:metadata :annotations :waiter/protocol])
+       :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
+       :service-id (get-in pod [:metadata :annotations :waiter/service-id])
+       :started-at (-> pod
+                       (get-in [:metadata :creationTimestamp])
+                       (timestamp-str->datetime))})))
 
 (defn- api-request
   [client url & {:keys [body content-type request-method] :as options}]
@@ -204,17 +204,12 @@
   {:active-instances (get-service-instances service scheduler)
    :failed-instances (get @service-id->failed-instances-transient-store (:id service) [])})
 
-(defn- service+instances
-  [service scheduler]
-  (let [instances (instances-breakdown service scheduler)]
-    [service instances]))
-
 (defn- patch-object-json
   [k8s-object-uri http-client ops]
   (api-request http-client k8s-object-uri
-               :request-method :patch
+               :body (as-json ops)
                :content-type "application/json-patch+json"
-               :body (as-json ops)))
+               :request-method :patch))
 
 (defn- patch-object-replicas
   [k8s-object-uri http-client replicas replicas']
@@ -231,7 +226,7 @@
                          "/apis/extensions/v1beta1/namespaces/"
                          (:namespace service)
                          "/replicasets/"
-                         (:app-name service))
+                         (:k8s-name service))
         instances (:task-count service)]
     (patch-object-replicas http-client request-url instances instances')))
 
@@ -241,7 +236,7 @@
                          "/apis/extensions/v1beta1/namespaces/"
                          (:namespace service)
                          "/replicasets/"
-                         (:app-name service))
+                         (:k8s-name service))
         instances (:task-count service)
         instances' (+ instances instances-delta)]
     (patch-object-replicas http-client request-url instances instances')))
@@ -272,21 +267,21 @@
 (defn- service-spec
   [service-id service-description scheduler service-id->password-fn]
   (let [spec-file-path "./specs/k8s-default-pod.edn" ; TODO - allow user to provide this via the config file
-        {:strs [backend-proto cmd cpus #_disk grace-period-secs health-check-interval-secs
-                health-check-max-consecutive-failures mem ports min-instances
-                #_restart-backoff-factor run-as-user]} service-description
+        {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
+                health-check-max-consecutive-failures mem min-instances ports run-as-user]} service-description
         home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
         port0 8080
-        template-env (into [{:name "MESOS_DIRECTORY", :value home-path}
+        template-env (into [;; We set these two "MESOS_*" variables to improve interoperability
+                            {:name "MESOS_DIRECTORY", :value home-path}
                             {:name "MESOS_SANDBOX", :value home-path}]
                            (concat
                              (for [[k v] common-env]
                                {:name k, :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i), :value (str (+ port0 i))})))
-        params {:app-name (service-id->app-name service-id scheduler)
+        params {:k8s-name (service-id->app-name service-id scheduler)
                 :backend-protocol backend-proto
                 :backend-protocol-caps (string/upper-case backend-proto)
                 :cmd cmd
@@ -303,10 +298,7 @@
                 :run-as-user run-as-user
                 :service-id service-id
                 :ssl? (= "https" backend-proto)}
-        delayed-values {:run-as-uid (->> run-as-user (shell/sh "id" "-u")
-                                         :out string/trim Integer/parseInt delay)}
-        edn-opts {:readers {'waiter/lookup (comp force delayed-values)
-                            'waiter/param params
+        edn-opts {:readers {'waiter/param params
                             'waiter/param-str (comp str params)
                             'waiter/port #(+ port0 %)
                             'waiter.fn/into (fn [[xs ys]] (into xs ys))
@@ -324,8 +316,8 @@
                          (service-description->namespace service-description)
                          "/replicasets")
         response-json (api-request http-client request-url
-                                     :request-method :post
-                                     :body (as-json spec-json))]
+                                   :request-method :post
+                                   :body (as-json spec-json))]
     (replicaset->Service response-json)))
 
 (defn- delete-service
@@ -336,7 +328,7 @@
                             "/apis/extensions/v1beta1/namespaces/"
                             (:namespace service)
                             "/replicasets/"
-                            (:app-name service))]
+                            (:k8s-name service))]
     ; FIXME - catch and handle exceptions
     (patch-object-json replicaset-url http-client
                        [{:op :replace, :path "/metadata/annotations/waiter~1app-status", :value "killed"}
@@ -345,8 +337,8 @@
             :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
       (api-request http-client pod-url :request-method :delete))
     (api-request http-client replicaset-url :request-method :delete)
-    {:result :deleted
-     :message (str "K8s deleted ReplicaSet " (:app-name service))}))
+    {:message (str "K8s deleted ReplicaSet " (:k8s-name service))
+     :result :deleted}))
 
 (defn- service-id->service
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
@@ -369,10 +361,9 @@
   scheduler/ServiceScheduler
 
   (get-apps->instances [this]
-    (let [apps (get-services this)
-          app->app+instances #(service+instances % this)
-          app->instances (into {} (mapv app->app+instances apps))]
-      app->instances))
+    (->> this
+         get-services
+         (pc/map-from-keys #(instances-breakdown % this))))
 
   (get-apps [this]
     (get-services this))
@@ -436,8 +427,8 @@
   (scale-app [this service-id scale-to-instances]
     (ss/try+
       (scale-service-to api-server-url http-client
-                     (service-id->service this service-id)
-                     scale-to-instances)
+                        (service-id->service this service-id)
+                        scale-to-instances)
       {:success true
        :status 200
        :result :scaled
@@ -464,6 +455,19 @@
   (state [_]
     {:service-id->failed-instances @service-id->failed-instances-transient-store}))
 
+(defn- start-auth-renewer
+  [{:keys [refresh-delay-minutes refresh-fn]}]
+  (let [refresh (-> refresh-fn utils/resolve-symbol deref)
+        auth-update-fn (fn auth-update []
+                         (if-let [auth-str' (refresh)]
+                           (reset! k8s-api-auth-str auth-str')))]
+    (auth-update-fn)
+    (when [refresh-delay-minutes]
+      (assert (utils/pos-int? refresh-delay-minutes))
+      (-> refresh-delay-minutes
+          t/minutes
+          (du/start-timer-task auth-update-fn)))))
+
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
@@ -476,16 +480,7 @@
         name-max-length 63
         service-id->failed-instances-transient-store (atom {})]
     (when authentication
-      (let [refresh-fn (-> authentication :refresh-fn utils/resolve-symbol deref)
-            auth-update-fn (fn auth-update []
-                             (if-let [auth-str' (refresh-fn)]
-                               (reset! k8s-api-auth-str auth-str')))]
-        (auth-update-fn)
-        (when-let [refresh-delay-minutes (:refresh-delay-minutes authentication)]
-          (assert (utils/pos-int? refresh-delay-minutes))
-          (-> refresh-delay-minutes
-              t/minutes
-              (du/start-timer-task auth-update-fn)))))
+      (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
                            name-max-length
                            service-id->failed-instances-transient-store
