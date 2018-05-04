@@ -769,9 +769,10 @@
   (map->InstanceTracker {:service-id service-id
                          :known-instance-ids #{}
                          ; TODO - figure out min instances from service-id
-                         ; TODO - track overall request-to-running time
-                         :scheduling-instance-timers [[(timers/start (metrics/waiter-timer "app-schedule-time"))
-                                                       (timers/start (metrics/service-timer service-id "app-schedule-time"))]]
+                         :scheduling-instance-timers [{:schedule [(timers/start (metrics/waiter-timer "app-schedule-time"))
+                                                                  (timers/start (metrics/service-timer service-id "app-schedule-time"))]
+                                                       :total [(timers/start (metrics/waiter-timer "app-init-to-healthy-time"))
+                                                               (timers/start (metrics/service-timer service-id "app-init-to-healthy-time"))]}]
                          :starting-instance-trackers []}))
 
 (defn update-instance-trackers
@@ -792,12 +793,13 @@
                      starting-instance-trackers' (->>
                                                    ;; Start timers for startup time of newly-scheduled instances.
                                                    ;; NOTE: Since Waiter only scales down by killing known instances, waiting-to-be-scheduled instances are not removed (unlike starting instances).
-                                                   (map (fn [instance-id timers]
-                                                          (doseq [timer timers] (timers/stop timer))
+                                                   (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
+                                                          (doseq [timer schedule-timers] (timers/stop timer))
                                                           (log/info "Instance" instance-id "started (recorded metric)")
                                                           {:instance-id instance-id
-                                                           :timers [(timers/start (metrics/waiter-timer "app-startup-time"))
-                                                                    (timers/start (metrics/service-timer service-id "app-startup-time"))]})
+                                                           :timers (concat [(timers/start (metrics/waiter-timer "app-startup-time"))
+                                                                            (timers/start (metrics/service-timer service-id "app-startup-time"))]
+                                                                           total-timers)})
                                                         new-instance-ids paired-timers)
                                                    (concat starting-instance-trackers)
                                                    (filterv (fn [{:keys [instance-id timers]}]
