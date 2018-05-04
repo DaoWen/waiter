@@ -778,12 +778,10 @@
 (defn update-instance-trackers
   "Track metrics on app instances, specifically schedule and startup times."
   [service-instance-trackers new-service-ids removed-service-ids service-id->healthy-instances service-id->unhealthy-instances]
-  (log/info "Updating trackers..." [service-instance-trackers new-service-ids removed-service-ids service-id->healthy-instances service-id->unhealthy-instances])
   (->> service-instance-trackers
        (remove (comp removed-service-ids :service-id))
        (concat (mapv new-tracker-val new-service-ids))
        (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timers starting-instance-trackers]}]
-               (log/info "Updating trackers for service" [service-id known-instance-ids scheduling-instance-timers starting-instance-trackers])
                (let [healthy-instance-ids (->> service-id service-id->healthy-instances (map :id) set)
                      known-instance-ids' (->> service-id service-id->unhealthy-instances (map :id) (into healthy-instance-ids))
                      new-instance-ids (set/difference known-instance-ids' known-instance-ids)
@@ -795,7 +793,6 @@
                                                    ;; NOTE: Since Waiter only scales down by killing known instances, waiting-to-be-scheduled instances are not removed (unlike starting instances).
                                                    (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
                                                           (doseq [timer schedule-timers] (timers/stop timer))
-                                                          (log/info "Instance" instance-id "started (recorded metric)")
                                                           {:instance-id instance-id
                                                            :timers (concat [(timers/start (metrics/waiter-timer "app-startup-time"))
                                                                             (timers/start (metrics/service-timer service-id "app-startup-time"))]
