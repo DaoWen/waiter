@@ -463,6 +463,7 @@
           (if service-id
             (let [request-instances-time (t/now)
                   active-instance-ids (->> active-instances (map :id) set)
+                  {:keys [instances task-count]} service
                   {:keys [instance-id->unhealthy-instance instance-id->tracked-failed-instance instance-id->failed-health-check-count]}
                   (get service-id->health-check-context service-id)
                   {:keys [healthy-instances unhealthy-instances] :as service-instance-info}
@@ -485,11 +486,12 @@
                                         ; Assume nil service-instance-info means there was a failure in invoking marathon
                                         (conj scheduler-messages
                                               [:update-service-instances
-                                               (merge service-instance-info
-                                                      (select-keys service [:instances :task-count])
-                                                      {:service-id service-id
-                                                       :failed-instances all-failed-instances
-                                                       :scheduler-sync-time request-instances-time})])
+                                               (assoc service-instance-info
+                                                      :failed-instances all-failed-instances
+                                                      :instances instances
+                                                      :scheduler-sync-time request-instances-time
+                                                      :service-id service-id
+                                                      :task-count task-count)])
                                         scheduler-messages)
                   instance-id->unhealthy-instance' (->> unhealthy-instances
                                                         (map (fn [{:keys [id] :as instance}]
