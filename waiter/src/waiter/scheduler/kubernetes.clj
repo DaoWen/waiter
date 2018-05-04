@@ -37,24 +37,24 @@
 (defn- timestamp-str->datetime [k8s-timestamp-str]
   (du/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
-(defn- use-short-service-hash? [app-name-max-length]
+(defn- use-short-service-hash? [k8s-name-max-length]
   ;; This is fairly arbitrary, but if we have at least 48 characters for the app name,
   ;; then we can fit the full 32 character service-id hash, plus a hyphen as a separator,
   ;; and still have 25 characters left for some prefix of the app name.
   ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
-  (< app-name-max-length 48))
+  (< k8s-name-max-length 48))
 
 (def pod-unique-suffix-length
   "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
   5)
 
-(defn- service-id->app-name [service-id {:keys [name-max-length] :as scheduler}]
+(defn- service-id->k8s-name [service-id {:keys [name-max-length] :as scheduler}]
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
-        app-name-max-length (- name-max-length pod-unique-suffix-length 1)
-        suffix (if (use-short-service-hash? app-name-max-length)
+        k8s-name-max-length (- name-max-length pod-unique-suffix-length 1)
+        suffix (if (use-short-service-hash? k8s-name-max-length)
                  (str \- x z)
                  (str \- x y z))
-        prefix-max-length (- app-name-max-length (count suffix))
+        prefix-max-length (- k8s-name-max-length (count suffix))
         app-prefix' (cond-> app-prefix
                       (< prefix-max-length (count app-prefix))
                       (subs 0 prefix-max-length))]
@@ -182,12 +182,12 @@
 
 
 (defn- get-replicaset-pods
-  [api-server-url http-client {:keys [app-name namespace] :as service}]
+  [api-server-url http-client {:keys [k8s-name namespace] :as service}]
   (->> (str api-server-url
             "/api/v1/namespaces/"
             namespace
             "/pods?labelSelector=app="
-            app-name)
+            k8s-name)
        (api-request http-client)
        :items))
 
@@ -272,7 +272,7 @@
         home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
-        port0 8080
+        port0 8080 ;; TODO - get this port number from scheduler settings
         template-env (into [;; We set these two "MESOS_*" variables to improve interoperability
                             {:name "MESOS_DIRECTORY", :value home-path}
                             {:name "MESOS_SANDBOX", :value home-path}]
@@ -281,7 +281,7 @@
                                {:name k, :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i), :value (str (+ port0 i))})))
-        params {:k8s-name (service-id->app-name service-id scheduler)
+        params {:k8s-name (service-id->k8s-name service-id scheduler)
                 :backend-protocol backend-proto
                 :backend-protocol-caps (string/upper-case backend-proto)
                 :cmd cmd
@@ -316,8 +316,8 @@
                          (service-description->namespace service-description)
                          "/replicasets")
         response-json (api-request http-client request-url
-                                   :request-method :post
-                                   :body (as-json spec-json))]
+                                   :body (as-json spec-json)
+                                   :request-method :post)]
     (replicaset->Service response-json)))
 
 (defn- delete-service
@@ -347,7 +347,7 @@
                               "/apis/extensions/v1beta1/namespaces/"
                               service-ns
                               "/replicasets?labelSelector=managed-by=waiter,app="
-                              (service-id->app-name service-id scheduler))
+                              (service-id->k8s-name service-id scheduler))
                          (api-request http-client)
                          :items)]
     (when (seq replicasets)
