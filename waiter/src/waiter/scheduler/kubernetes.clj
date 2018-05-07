@@ -106,22 +106,25 @@
   (and (= 137 (:exitCode pod-terminated-info))
        (= "Error" (:reason pod-terminated-info))))
 
-(defn- track-failed-instances [live-instance pod scheduler]
+(defn- track-failed-instances [{:keys [service-id] :as live-instance} pod {:keys [service-id->failed-instances-transient-store]}]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
     (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
           newest-failure-start-time (-> newest-failure :startedAt timestamp-str->datetime)
           restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
-          newest-failure-instance (merge live-instance
-                                         ; to match the behavior of the marathon scheduler,
-                                         ; don't include the exit code in failed instances that were killed by k8s
-                                         (when-not (killed-by-k8s? newest-failure)
-                                           {:exit-code (:exitCode newest-failure)})
-                                         {:flags failure-flags
-                                          :healthy? false
-                                          :id (pod->instance-id pod (dec restart-count))
-                                          :started-at newest-failure-start-time})]
-      (swap! (:service-id->failed-instances-transient-store scheduler)
-             update-in [(:service-id live-instance)] (comp vec conj) newest-failure-instance))))
+          newest-failure-id (pod->instance-id pod (dec restart-count))
+          failures (-> service-id->failed-instances-transient-store deref (get service-id))]
+      (when-not (contains? failures newest-failure-id)
+        (let [newest-failure-instance (merge live-instance
+                                             ; to match the behavior of the marathon scheduler,
+                                             ; don't include the exit code in failed instances that were killed by k8s
+                                             (when-not (killed-by-k8s? newest-failure)
+                                               {:exit-code (:exitCode newest-failure)})
+                                             {:flags failure-flags
+                                              :healthy? false
+                                              :id newest-failure-id
+                                              :started-at newest-failure-start-time})]
+          (swap! service-id->failed-instances-transient-store
+                 update-in [service-id] assoc newest-failure-id newest-failure-instance))))))
 
 (defn- pod->ServiceInstance
   [pod]
@@ -202,7 +205,7 @@
 (defn- instances-breakdown
   [service {:keys [service-id->failed-instances-transient-store] :as scheduler}]
   {:active-instances (get-service-instances service scheduler)
-   :failed-instances (get @service-id->failed-instances-transient-store (:id service) [])})
+   :failed-instances (vals (get @service-id->failed-instances-transient-store (:id service) []))})
 
 (defn- patch-object-json
   [k8s-object-uri http-client ops]
@@ -449,7 +452,7 @@
     [])
 
   (service-id->state [_ service-id]
-    {:failed-instances (get @service-id->failed-instances-transient-store service-id [])
+    {:failed-instances (vals (get @service-id->failed-instances-transient-store service-id))
      :killed-instances (scheduler/service-id->killed-instances service-id)})
 
   (state [_]
