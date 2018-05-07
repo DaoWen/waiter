@@ -44,7 +44,7 @@
   ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
   (< k8s-name-max-length 48))
 
-(def pod-unique-suffix-length
+(def ^:const pod-unique-suffix-length
   "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
   5)
 
