@@ -18,7 +18,7 @@
             [clojure.tools.logging :as log]
             [plumbing.core :as pc]
             [slingshot.slingshot :as ss]
-            [waiter.mesos.utils :as mesos-utils] ;; XXX - rename/refactor the mesos.utils namespace
+            [waiter.util.http-utils :as http-utils] ;; XXX - rename/refactor the mesos.utils namespace
             [waiter.scheduler :as scheduler]
             [waiter.service-description :as sd]
             [waiter.util.date-utils :as du]
@@ -153,7 +153,7 @@
   (k8s-log "Making request to K8s API server:" url request-method body)
   (ss/try+
     (let [auth-str @k8s-api-auth-str
-          result (pc/mapply mesos-utils/http-request client url
+          result (pc/mapply http-utils/http-request client url
                             :accept "application/json"
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
@@ -479,7 +479,7 @@
   {:pre [(utils/pos-int? framework-id-ttl)
          (utils/pos-int? (:conn-timeout http-options))
          (utils/pos-int? (:socket-timeout http-options))]}
-  (let [http-client (mesos-utils/http-client-factory http-options)
+  (let [http-client (http-utils/http-client-factory http-options)
         name-max-length 63
         service-id->failed-instances-transient-store (atom {})]
     (when authentication
