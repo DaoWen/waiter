@@ -145,10 +145,10 @@
        :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
        :service-id (get-in pod [:metadata :annotations :waiter/service-id])
        :started-at (-> pod
-                       (get-in [:metadata :creationTimestamp])
+                       (get-in [:status :startTime])
                        (timestamp-str->datetime))})))
 
-(defn- api-request
+(defn api-request
   [client url & {:keys [body content-type request-method] :as options}]
   (k8s-log "Making request to K8s API server:" url request-method body)
   (ss/try+
@@ -202,10 +202,10 @@
          (doto service-instance
            (track-failed-instances pod scheduler)))))
 
-(defn- instances-breakdown
+(defn instances-breakdown
   [service {:keys [service-id->failed-instances-transient-store] :as scheduler}]
   {:active-instances (get-service-instances service scheduler)
-   :failed-instances (vals (get @service-id->failed-instances-transient-store (:id service) []))})
+   :failed-instances (-> @service-id->failed-instances-transient-store (get (:id service) []) vals vec)})
 
 (defn- patch-object-json
   [k8s-object-uri http-client ops]
