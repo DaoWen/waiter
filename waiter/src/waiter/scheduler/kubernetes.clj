@@ -48,7 +48,7 @@
   "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
   5)
 
-(defn- service-id->k8s-name [service-id {:keys [name-max-length] :as scheduler}]
+(defn- service-id->k8s-name [{:keys [name-max-length] :as scheduler} service-id]
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
         k8s-name-max-length (- name-max-length pod-unique-suffix-length 1)
         suffix (if (use-short-service-hash? k8s-name-max-length)
@@ -106,7 +106,7 @@
   (and (= 137 (:exitCode pod-terminated-info))
        (= "Error" (:reason pod-terminated-info))))
 
-(defn- track-failed-instances [{:keys [service-id] :as live-instance} pod {:keys [service-id->failed-instances-transient-store]}]
+(defn- track-failed-instances [{:keys [service-id] :as live-instance} {:keys [service-id->failed-instances-transient-store]} pod]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
     (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
           newest-failure-start-time (-> newest-failure :startedAt timestamp-str->datetime)
@@ -183,9 +183,8 @@
             item (->> query-url (api-request http-client) :items)]
         (replicaset->Service item)))))
 
-
 (defn- get-replicaset-pods
-  [api-server-url http-client {:keys [k8s-name namespace] :as service}]
+  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} {:keys [k8s-name namespace]}]
   (->> (str api-server-url
             "/api/v1/namespaces/"
             namespace
@@ -195,17 +194,17 @@
        :items))
 
 (defn- get-service-instances
-  [service {:keys [api-server-url http-client] :as scheduler}]
-  (vec (for [pod (get-replicaset-pods api-server-url http-client service)
+  [{:keys [api-server-url http-client] :as scheduler} basic-service-info]
+  (vec (for [pod (get-replicaset-pods scheduler basic-service-info)
              :let [service-instance (pod->ServiceInstance pod)]
              :when (:host service-instance)]
          (doto service-instance
-           (track-failed-instances pod scheduler)))))
+           (track-failed-instances scheduler pod)))))
 
 (defn instances-breakdown
-  [service {:keys [service-id->failed-instances-transient-store] :as scheduler}]
-  {:active-instances (get-service-instances service scheduler)
-   :failed-instances (-> @service-id->failed-instances-transient-store (get (:id service) []) vals vec)})
+  [{:keys [service-id->failed-instances-transient-store] :as scheduler} {service-id :id :as basic-service-info}]
+  {:active-instances (get-service-instances scheduler basic-service-info)
+   :failed-instances (-> @service-id->failed-instances-transient-store (get service-id []) vals vec)})
 
 (defn- patch-object-json
   [k8s-object-uri http-client ops]
@@ -284,7 +283,7 @@
                                {:name k, :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i), :value (str (+ port0 i))})))
-        params {:k8s-name (service-id->k8s-name service-id scheduler)
+        params {:k8s-name (service-id->k8s-name scheduler service-id)
                 :backend-protocol backend-proto
                 :backend-protocol-caps (string/upper-case backend-proto)
                 :cmd cmd
@@ -350,7 +349,7 @@
                               "/apis/extensions/v1beta1/namespaces/"
                               service-ns
                               "/replicasets?labelSelector=managed-by=waiter,app="
-                              (service-id->k8s-name service-id scheduler))
+                              (service-id->k8s-name scheduler service-id))
                          (api-request http-client)
                          :items)]
     (when (seq replicasets)
@@ -366,14 +365,18 @@
   (get-apps->instances [this]
     (->> this
          get-services
-         (pc/map-from-keys #(instances-breakdown % this))))
+         (pc/map-from-keys #(instances-breakdown this %))))
 
   (get-apps [this]
     (get-services this))
 
   (get-instances [this service-id]
-    (let [service (service-id->service this service-id)]
-      (instances-breakdown service this)))
+    (instances-breakdown this
+                         {:id service-id
+                          :k8s-name (service-id->k8s-name this service-id)
+                          :namespace (-> service-id
+                                         service-id->service-description-fn
+                                         (get "run-as-user"))}))
 
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
