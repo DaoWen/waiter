@@ -22,24 +22,24 @@
             [waiter.util.date-utils :as du])
   (:import waiter.scheduler.kubernetes.KubernetesScheduler))
 
-(deftest test-respone-data->service-instances
-  (let [test-cases [{:name "response-data->service-instances no response"
+(deftest test-scheduler-get-instances
+  (let [test-cases [{:name "get-instances no response"
                      :kubernetes-response nil
                      :expected-response {:active-instances []
                                          :failed-instances []}}
 
-                    {:name "response-data->service-instances empty response"
+                    {:name "get-instances empty response"
                      :kubernetes-response {}
                      :expected-response {:active-instances []
                                          :failed-instances []}}
 
-                    {:name "response-data->service-instances empty-app response"
+                    {:name "get-instances empty-app response"
                      :kubernetes-response {:apiVersion "v1" :items [] :kind "List"
                                            :metadata {:resourceVersion "" :selfLink ""}}
                      :expected-response {:active-instances []
                                          :failed-instances []}}
 
-                    {:name "response-data->service-instances valid response with task failure"
+                    {:name "get-instances valid response with task failure"
                      :kubernetes-response
                      {:apiVersion "v1"
                       :kind "List"
@@ -129,7 +129,7 @@
                                             :service-id "test-app-1234",
                                             :started-at (du/str-to-date "2014-09-12T23:23:41Z" k8s-timestamp-format)})]}}
 
-                    {:name "response-data->service-instances valid response without task failure"
+                    {:name "get-instances valid response without task failure"
                      :kubernetes-response
                      {:apiVersion "v1"
                       :kind "List"
@@ -208,11 +208,14 @@
                       :failed-instances []}}]]
     (doseq [{:keys [expected-response kubernetes-response name]} test-cases]
       (testing (str "Test " name)
-        (let [dummy-service {:id "test-app-1234"}
-              dummy-scheduler {:service-id->failed-instances-transient-store (atom {})}
+        (let [service-id "test-app-1234"
+              dummy-scheduler (map->KubernetesScheduler
+                                {:service-id->failed-instances-transient-store (atom {})
+                                 :service-id->service-description-fn {service-id {"run-as-user" "myself"}}
+                                 :name-max-length 63})
               actual-response (with-redefs [;; mock the K8s API server returning our test responses
                                             api-request (constantly kubernetes-response)]
-                                (->> (instances-breakdown dummy-service dummy-scheduler)
+                                (->> (scheduler/get-instances dummy-scheduler service-id)
                                      ;; strip out extra fields added to K8s-specific records
                                      (pc/map-vals (partial mapv #(dissoc % :k8s-name :namespace :pod-name :restart-count)))))]
           (is (= expected-response actual-response) (str name))
