@@ -70,25 +70,23 @@
   [data]
   (json/write-str data :key-fn #(if (keyword? %) (kw->str %) %)))
 
-(defn- replicaset->Service
-  ;; FIXME - catch exceptions and return nil
-  [replicaset]
-  (let [replicaset-status (:status replicaset)
-        ready (:readyReplicas replicaset-status 0)
-        requested (get-in replicaset [:spec :replicas])
-        started (:replicas replicaset-status 0)
-        available (:availableReplicas replicaset-status 0)
-        unavailable (:unavailableReplicas replicaset-status 0)]
+(pc/defnk replicaset->Service
+  [spec
+   [:metadata name namespace [:annotations waiter/service-id]]
+   [:status replicas {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
+  (let [requested (:replicas spec)
+        running (+ availableReplicas unavailableReplicas)]
+    ;; FIXME - catch exceptions and return nil
     (scheduler/make-Service
-      {:k8s-name (get-in replicaset [:metadata :name])
-       :id (get-in replicaset [:metadata :annotations :waiter/service-id])
-       :instances started
-       :namespace (get-in replicaset [:metadata :namespace])
+      {:k8s-name name
+       :id service-id
+       :instances replicas  ;; started
+       :namespace namespace
        :task-count requested
-       :task-stats {:healthy available
-                    :running ready
-                    :staged (- requested ready)
-                    :unhealthy unavailable}})))
+       :task-stats {:healthy readyReplicas
+                    :running running
+                    :staged (- replicas running)
+                    :unhealthy (- replicas readyReplicas)}})))
 
 (defn- pod->instance-id
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
@@ -134,7 +132,7 @@
       {:k8s-name (get-in pod [:metadata :labels :app])
        :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
                          Integer/parseInt range next (mapv #(+ port0 %)))
-       :healthy? (get-in pod [:status :containerStatuses 0 :ready])
+       :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
        :host (get-in pod [:status :podIP])
        :id (pod->instance-id pod)
        :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
@@ -171,17 +169,13 @@
   (get service-description "run-as-user"))
 
 (defn- get-services
-  [{:keys [api-server-url http-client namespaces-fn] :as scheduler}]
-  (let [query-url-prefix (str api-server-url "/apis/extensions/v1beta1")
-        query-url-suffix "/replicasets?labelSelector=managed-by=waiter"
-        query-urls (if namespaces-fn
-                     (for [n (namespaces-fn)]
-                       (str query-url-prefix "/namespaces/" n query-url-suffix))
-                     [(str query-url-prefix query-url-suffix)])]
-    (vec
-      (for [query-url query-urls
-            item (->> query-url (api-request http-client) :items)]
-        (replicaset->Service item)))))
+  [{:keys [api-server-url http-client] :as scheduler}]
+  (->>
+    "/apis/extensions/v1beta1/replicasets?labelSelector=managed-by=waiter"
+    (str api-server-url)
+    (api-request http-client)
+    :items
+    (mapv replicaset->Service)))
 
 (defn- get-replicaset-pods
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} {:keys [k8s-name namespace]}]
@@ -365,7 +359,7 @@
   (get-apps->instances [this]
     (->> this
          get-services
-         (pc/map-from-keys #(instances-breakdown this %))))
+         (pc/map-from-keys (partial instances-breakdown this))))
 
   (get-apps [this]
     (get-services this))

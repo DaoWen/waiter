@@ -20,7 +20,32 @@
             [waiter.scheduler.kubernetes :refer :all]
             [waiter.scheduler :as scheduler]
             [waiter.util.date-utils :as du])
-  (:import waiter.scheduler.kubernetes.KubernetesScheduler))
+  (:import waiter.scheduler.kubernetes.KubernetesScheduler
+           (waiter.scheduler Service ServiceInstance)))
+
+(defn- make-dummy-scheduler
+  ([service-ids] (make-dummy-scheduler service-ids {}))
+  ([service-ids args]
+   (->
+     {:name-max-length 63
+      :service-id->failed-instances-transient-store (atom {})
+      :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
+                                                            service-ids)}
+     (merge args)
+     map->KubernetesScheduler)))
+
+(defn- sanitize-k8s-service-records
+  "Walks data structure to remove extra fields added by Kubernetes from Service and ServiceInstance records."
+  [walkable-collection]
+  (walk/postwalk
+    (fn sanitizer [x]
+      (cond
+        (instance? Service x)
+        (dissoc x :k8s-name :namespace)
+        (instance? ServiceInstance x)
+        (dissoc x :k8s-name :namespace :pod-name :restart-count)
+        :else x))
+    walkable-collection))
 
 (deftest test-scheduler-get-instances
   (let [test-cases [{:name "get-instances no response"
@@ -209,169 +234,197 @@
     (doseq [{:keys [expected-response kubernetes-response name]} test-cases]
       (testing (str "Test " name)
         (let [service-id "test-app-1234"
-              dummy-scheduler (map->KubernetesScheduler
-                                {:service-id->failed-instances-transient-store (atom {})
-                                 :service-id->service-description-fn {service-id {"run-as-user" "myself"}}
-                                 :name-max-length 63})
+              dummy-scheduler (make-dummy-scheduler [service-id])
               actual-response (with-redefs [;; mock the K8s API server returning our test responses
                                             api-request (constantly kubernetes-response)]
                                 (->> (scheduler/get-instances dummy-scheduler service-id)
-                                     ;; strip out extra fields added to K8s-specific records
-                                     (pc/map-vals (partial mapv #(dissoc % :k8s-name :namespace :pod-name :restart-count)))))]
+                                     sanitize-k8s-service-records))]
           (is (= expected-response actual-response) (str name))
           (scheduler/preserve-only-killed-instances-for-services! []))))))
 
-(comment "Disabled tests"
+(deftest test-scheduler-get-apps->instances
+  (let [services-response
+        {:kind "ReplicaSetList"
+         :apiVersion "extensions/v1beta1"
+         :items [{:metadata {:name "test-app-1234"
+                             :namespace "myself"
+                             :labels {:app "test-app-1234"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/app-status "live"
+                                           :waiter/service-id "test-app-1234"}}
+                  :spec {:replicas 2
+                         :selector {:matchLabels {:app "test-app-1234"
+                                                  :managed-by "waiter"}}}
+                  :status {:replicas 2
+                           :readyReplicas 2
+                           :availableReplicas 2}}
+                 {:metadata {:name "test-app-6789"
+                             :namespace "myself"
+                             :labels {:app "test-app-6789"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/app-status "live"
+                                           :waiter/service-id "test-app-6789"}}
+                  :spec {:replicas 3
+                         :selector {:matchLabels {:app "test-app-6789"
+                                                  :managed-by "waiter"}}}
+                  :status {:replicas 3
+                           :readyReplicas 1
+                           :availableReplicas 2
+                           :unavailableReplicas 1}}]}
 
-(deftest test-response-data->service->service-instances
-  (let [input [{:id "test-app-1234"
-                :instances 2
-                :healthChecks [{:path "/ping", :portIndex 0, :protocol "HTTPS", :timeoutSeconds 10}]
-                :tasks [{:appId "/test-app-1234"
-                         :healthCheckResults [{:alive true
-                                               :consecutiveFailures 0
-                                               :firstSuccess "2014-09-13T00:20:28.101Z"
-                                               :lastFailure nil
-                                               :lastSuccess "2014-09-13T002507.506Z"
-                                               :taskId "test-app-1234.A"}]
-                         :host "10.141.141.11"
-                         :id "test-app-1234.A"
-                         :ports [31045]
-                         :stagedAt "2014-09-12T23:28:28.594Z"
-                         :startedAt "2014-09-13T00:24:46.959Z"
-                         :version "2014-09-12T23:28:21.737Z"}
-                        {:appId "test-app-1234"
-                         :healthCheckResults [{:alive true
-                                               :consecutiveFailures 0
-                                               :firstSuccess "2014-09-13T00:20:28.101Z"
-                                               :lastFailure nil
-                                               :lastSuccess "2014-09-13T002507.508Z"
-                                               :taskId "test-app-1234.B"}]
-                         :host "10.141.141.12"
-                         :id "test-app-1234.B"
-                         :ports [31234]
-                         :stagedAt "2014-09-12T23:28:22.587Z"
-                         :startedAt "2014-09-13T00:24:46.965Z"
-                         :version "2014-09-12T23:28:21.737Z"}]
-                :tasksRunning 2
-                :tasksHealthy 2
-                :tasksUnhealthy 0
-                :tasksStaged 0}
-               {:id "test-app-6789"
-                :instances 3
-                :lastTaskFailure {:appId "test-app-6789"
-                                  :host "10.141.141.10"
-                                  :message "Abnormal executor termination"
-                                  :state "TASK_FAILED"
-                                  :taskId "test-app-6789.D"
-                                  :timestamp "2014-09-12T23:23:41.711Z"
-                                  :version "2014-09-12T23:28:21.737Z"}
-                :healthChecks [{:path "/health", :portIndex 0, :protocol "HTTP", :timeoutSeconds 10}]
-                :tasks [{:appId "test-app-6789"
-                         :healthCheckResults [{:alive true
-                                               :consecutiveFailures 0
-                                               :firstSuccess "2014-09-13T00:20:28.101Z"
-                                               :lastFailure nil
-                                               :lastSuccess "2014-09-13T002507.506Z"
-                                               :taskId "test-app-6789.A"}]
-                         :host "10.141.141.11"
-                         :id "/test-app-6789.A"
-                         :ports [31045]
-                         :stagedAt "2014-09-12T23:28:28.594Z"
-                         :startedAt "2014-09-13T00:24:46.959Z"
-                         :version "2014-09-12T23:28:21.737Z"}
-                        {:appId "/test-app-6789"
-                         :host "10.141.141.12"
-                         :id "/test-app-6789.B"
-                         :ports [36789]
-                         :stagedAt "2014-09-12T23:28:22.587Z"
-                         :startedAt "2014-09-13T00:24:56.965Z"
-                         :version "2014-09-12T23:28:21.737Z"}
-                        {:appId "/test-app-6789"
-                         :healthCheckResults [{:alive false
-                                               :consecutiveFailures 10
-                                               :firstSuccess "2014-09-13T00:20:28.101Z"
-                                               :lastFailure "2014-09-13T002507.508Z"
-                                               :lastSuccess nil
-                                               :taskId "test-app-6789.C"}]
-                         :host "10.141.141.13"
-                         :id "test-app-6789.C"
-                         :ports [46789]
-                         :stagedAt "2014-09-12T23:28:22.587Z"
-                         :startedAt "2014-09-14T00:24:46.965Z"
-                         :version "2014-09-12T23:28:21.737Z"}]}]
-        expected (assoc {}
-                        (scheduler/make-Service {:id "test-app-1234"
-                                                 :instances 2
-                                                 :task-count 2
-                                                 :task-stats {:running 2, :healthy 2, :unhealthy 0, :staged 0}})
-                        {:active-instances
-                         (list
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-1234.A"
-                              :service-id "test-app-1234"
-                              :healthy? true
-                              :host "10.141.141.11"
-                              :port 31045
-                              :protocol "https"
-                              :started-at (du/str-to-date "2014-09-13T00:24:46.959Z" k8s-timestamp-format)})
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-1234.B"
-                              :service-id "test-app-1234"
-                              :healthy? true
-                              :host "10.141.141.12"
-                              :port 31234
-                              :protocol "https"
-                              :started-at (du/str-to-date "2014-09-13T00:24:46.965Z" k8s-timestamp-format)}))
-                         :failed-instances []
-                         :killed-instances []}
-                        (scheduler/make-Service {:id "test-app-6789", :instances 3, :task-count 3})
-                        {:active-instances
-                         (list
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-6789.A"
-                              :service-id "test-app-6789"
-                              :healthy? true
-                              :host "10.141.141.11"
-                              :port 31045
-                              :protocol "http"
-                              :started-at (du/str-to-date "2014-09-13T00:24:46.959Z" k8s-timestamp-format)})
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-6789.B"
-                              :service-id "test-app-6789"
-                              :healthy? nil
-                              :host "10.141.141.12"
-                              :port 36789
-                              :protocol "http"
-                              :started-at (du/str-to-date "2014-09-13T00:24:56.965Z" k8s-timestamp-format)})
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-6789.C"
-                              :service-id "test-app-6789"
-                              :healthy? false
-                              :host "10.141.141.13"
-                              :port 46789
-                              :protocol "http"
-                              :started-at (du/str-to-date "2014-09-14T00:24:46.965Z" k8s-timestamp-format)}))
-                         :failed-instances
-                         (list
-                           (scheduler/make-ServiceInstance
-                             {:id "test-app-6789.D"
-                              :service-id "test-app-6789"
-                              :healthy? false
-                              :host "10.141.141.10"
-                              :port 0
-                              :protocol "http"
-                              :started-at (du/str-to-date "2014-09-12T23:23:41.711Z" k8s-timestamp-format)
-                              :message "Abnormal executor termination"}))
-                         :killed-instances []})
-        service-id->failed-instances-transient-store (atom {})
-        service-id->service-description {"test-app-1234" {"backend-proto" "https"}
-                                         "test-app-6789" {"backend-proto" "http"}}
-        actual (response-data->service->service-instances
-                 input (fn [] nil) nil service-id->failed-instances-transient-store service-id->service-description)]
+        app-1234-pods-response
+        {:kind "PodList"
+         :apiVersion "v1"
+         :items [{:metadata {:name "test-app-1234-abcd1"
+                             :namespace "myself"
+                             :labels {:app "test-app-1234"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/port-count "1"
+                                           :waiter/protocol "https"
+                                           :waiter/service-id "test-app-1234"}}
+                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+                  :status {:podIP "10.141.141.11"
+                           :startTime  "2014-09-13T00:24:46Z"
+                           :containerStatuses [{:name "test-app-1234"
+                                                :ready true
+                                                :restartCount 0}]}}
+                 {:metadata {:name "test-app-1234-abcd2"
+                             :namespace "myself"
+                             :labels {:app "test-app-1234"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/port-count "1"
+                                           :waiter/protocol "https"
+                                           :waiter/service-id "test-app-1234"}}
+                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+                  :status {:podIP "10.141.141.12"
+                           :startTime "2014-09-13T00:24:47Z"
+                           :containerStatuses [{:name "test-app-1234"
+                                                :ready true
+                                                :restartCount 0}]}}]}
+
+        app-6789-pods-response
+        {:kind "PodList"
+         :apiVersion "v1"
+         :items [{:metadata {:name "test-app-6789-abcd1"
+                             :namespace "myself"
+                             :labels {:app "test-app-6789"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/port-count "1"
+                                           :waiter/protocol "http"
+                                           :waiter/service-id "test-app-6789"}}
+                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+                  :status {:podIP "10.141.141.13"
+                           :startTime "2014-09-13T00:24:35Z"
+                           :containerStatuses [{:name "test-app-6789"
+                                                :ready true
+                                                :restartCount 0}]}}
+                 {:metadata {:name "test-app-6789-abcd2"
+                             :namespace "myself"
+                             :labels {:app "test-app-6789"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/port-count "1"
+                                           :waiter/protocol "http"
+                                           :waiter/service-id "test-app-6789"}}
+                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+                  :status {:podIP "10.141.141.14"
+                           :startTime "2014-09-13T00:24:37Z"
+                           :containerStatuses [{:name "test-app-6789"
+                                                :lastState {:terminated {:exitCode 255
+                                                                         :reason "Error"
+                                                                         :startedAt "2014-09-13T00:24:36Z"}}
+                                                :restartCount 1}]}}
+                 {:metadata {:name "test-app-6789-abcd3"
+                             :namespace "myself"
+                             :labels {:app "test-app-6789"
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/port-count "1"
+                                           :waiter/protocol "http"
+                                           :waiter/service-id "test-app-6789"}}
+                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+                  :status {:podIP "10.141.141.15"
+                           :startTime "2014-09-13T00:24:38Z"
+                           :containerStatuses [{:name "test-app-6789"
+                                                :restartCount 0}]}}]}
+
+        api-server-responses [services-response app-1234-pods-response app-6789-pods-response]
+
+        expected (hash-map
+                   (scheduler/make-Service {:id "test-app-1234"
+                                            :instances 2
+                                            :task-count 2
+                                            :task-stats {:running 2, :healthy 2, :unhealthy 0, :staged 0}})
+                   {:active-instances
+                    [(scheduler/make-ServiceInstance
+                       {:healthy? true
+                        :host "10.141.141.11"
+                        :id "test-app-1234.abcd1-0"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "https"
+                        :service-id "test-app-1234"
+                        :started-at (du/str-to-date "2014-09-13T00:24:46Z" k8s-timestamp-format)})
+                     (scheduler/make-ServiceInstance
+                       {:healthy? true
+                        :host "10.141.141.12"
+                        :id "test-app-1234.abcd2-0"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "https"
+                        :service-id "test-app-1234"
+                        :started-at (du/str-to-date "2014-09-13T00:24:47Z" k8s-timestamp-format)})]
+                    :failed-instances []}
+
+                   (scheduler/make-Service {:id "test-app-6789" :instances 3 :task-count 3
+                                            :task-stats {:running 3 :healthy 1 :unhealthy 2 :staged 0}})
+                   {:active-instances
+                    [(scheduler/make-ServiceInstance
+                       {:healthy? true
+                        :host "10.141.141.13"
+                        :id "test-app-6789.abcd1-0"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "http"
+                        :service-id "test-app-6789"
+                        :started-at (du/str-to-date "2014-09-13T00:24:35Z" k8s-timestamp-format)})
+                     (scheduler/make-ServiceInstance
+                       {:healthy? false
+                        :host "10.141.141.14"
+                        :id "test-app-6789.abcd2-1"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "http"
+                        :service-id "test-app-6789"
+                        :started-at (du/str-to-date "2014-09-13T00:24:37Z" k8s-timestamp-format)})
+                     (scheduler/make-ServiceInstance
+                       {:healthy? false
+                        :host "10.141.141.15"
+                        :id "test-app-6789.abcd3-0"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "http"
+                        :service-id "test-app-6789"
+                        :started-at (du/str-to-date "2014-09-13T00:24:38Z" k8s-timestamp-format)})]
+                    :failed-instances
+                    [(scheduler/make-ServiceInstance
+                       {:exit-code 255
+                        :healthy? false
+                        :host "10.141.141.14"
+                        :id "test-app-6789.abcd2-0"
+                        :log-directory "/home/myself"
+                        :port 8080
+                        :protocol "http"
+                        :service-id "test-app-6789"
+                        :started-at (du/str-to-date "2014-09-13T00:24:36Z" k8s-timestamp-format)})]})
+        dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
+        response-iterator (.iterator api-server-responses)
+        actual (with-redefs [api-request (fn [& _] (.next response-iterator))]
+                 (->> dummy-scheduler
+                      scheduler/get-apps->instances
+                      sanitize-k8s-service-records))]
     (is (= expected actual))
-    (scheduler/preserve-only-killed-instances-for-services! [])
-    (preserve-only-failed-instances-for-services! service-id->failed-instances-transient-store [])))
+    (scheduler/preserve-only-killed-instances-for-services! [])))
+
+(comment "Disabled tests"
 
 (deftest test-service-id->failed-instances-transient-store
   (let [faled-instance-response-fn (fn [service-id instance-id]
