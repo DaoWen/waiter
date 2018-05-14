@@ -866,6 +866,12 @@
                                      (metrics/transient-metrics-gc scheduler-state-chan local-usage-agent service-gc-go-routine metrics-config)]
                                  (metrics/transient-metrics-data-producer service-id->metrics-chan service-id->metrics-fn metrics-config)
                                  metrics-gc-chans))
+   :instance-startup-stats-maintainer (pc/fnk [[:routines service-id->service-description-fn]
+                                               router-state-maintainer]
+                                        (-> router-state-maintainer
+                                            (get-in [:maintainer-chans :router-state-push-mult])
+                                            (async/tap (au/latest-chan))
+                                            (state/start-instance-startup-stats-maintainer service-id->service-description-fn)))
    :interstitial-maintainer (pc/fnk [[:routines service-id->service-description-fn]
                                      [:state interstitial-state-atom]
                                      scheduler-maintainer]
