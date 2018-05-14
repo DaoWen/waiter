@@ -762,17 +762,17 @@
   (log/warn "[close-update-state-channel] closing update-state-chan of" service-id)
   (async/go (async/close! update-state-chan)))
 
-(defrecord InstanceTracker [service-id known-instance-ids scheduling-instance-timers starting-instance-trackers])
+(defrecord InstanceTracker [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers])
 
 (defn- new-tracker-val
   [service-id]
   (map->InstanceTracker {:service-id service-id
                          :known-instance-ids #{}
                          ; TODO - figure out min instances from service-id
-                         :scheduling-instance-timers [{:schedule [(timers/start (metrics/waiter-timer "app-schedule-time"))
-                                                                  (timers/start (metrics/service-timer service-id "app-schedule-time"))]
-                                                       :total [(timers/start (metrics/waiter-timer "app-init-to-healthy-time"))
-                                                               (timers/start (metrics/service-timer service-id "app-init-to-healthy-time"))]}]
+                         :scheduling-instance-timer-contexts [{:schedule [(timers/start (metrics/waiter-timer "service-init-overhead" "schedule-time"))
+                                                                          (timers/start (metrics/service-timer service-id "service-init-overhead" "schedule-time"))]
+                                                               :total [(timers/start (metrics/waiter-timer "service-init-overhead" "init-to-healthy-time"))
+                                                                       (timers/start (metrics/service-timer service-id "service-init-overhead" "init-to-healthy-time"))]}]
                          :starting-instance-trackers []}))
 
 (defn update-instance-trackers
@@ -781,7 +781,7 @@
   (->> service-instance-trackers
        (remove (comp removed-service-ids :service-id))
        (concat (mapv new-tracker-val new-service-ids))
-       (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timers starting-instance-trackers]}]
+       (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers]}]
                (let [healthy-instance-ids (->> service-id
                                                (get service-id->healthy-instances)
                                                (map :id)
@@ -793,15 +793,15 @@
                      new-instance-ids (set/difference known-instance-ids' known-instance-ids)
                      ;; Pair up all of the newly-scheduled instances with their timers.
                      ;; NOTE: Using split-at allows us to drop the new-instances if we're somehow missing the corresponding timers
-                     [paired-timers scheduling-instance-timers'] (split-at (count new-instance-ids) scheduling-instance-timers)
+                     [paired-timers scheduling-instance-timer-contexts'] (split-at (count new-instance-ids) scheduling-instance-timer-contexts)
                      starting-instance-trackers' (->>
                                                    ;; Start timers for startup time of newly-scheduled instances.
                                                    ;; NOTE: Since Waiter only scales down by killing known instances, waiting-to-be-scheduled instances are not removed (unlike starting instances).
                                                    (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
                                                           (doseq [timer schedule-timers] (timers/stop timer))
                                                           {:instance-id instance-id
-                                                           :timers (concat [(timers/start (metrics/waiter-timer "app-startup-time"))
-                                                                            (timers/start (metrics/service-timer service-id "app-startup-time"))]
+                                                           :timers (concat [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
+                                                                            (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
                                                                            total-timers)})
                                                         new-instance-ids paired-timers)
                                                    (concat starting-instance-trackers)
@@ -813,7 +813,7 @@
                                                                 (contains? healthy-instance-ids instance-id) (doseq [timer timers] (timers/stop timer))
                                                                 ;; Continue tracking all other instances.
                                                                 :else true))))]
-                 (->InstanceTracker service-id known-instance-ids' scheduling-instance-timers' starting-instance-trackers'))))))
+                 (->InstanceTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-trackers'))))))
 
 (defn start-service-chan-maintainer
   "go block to maintain the mapping from service-id to chans to communicate with
