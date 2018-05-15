@@ -99,6 +99,7 @@
                      "state" [["" :state-all-handler-fn]
                               ["/fallback" :state-fallback-handler-fn]
                               ["/interstitial" :state-interstitial-handler-fn]
+                              ["/instance-startup" :state-instance-startup-handler-fn]
                               ["/kv-store" :state-kv-store-handler-fn]
                               ["/leader" :state-leader-handler-fn]
                               ["/local-usage" :state-local-usage-handler-fn]
@@ -1174,6 +1175,13 @@
                                       (wrap-secure-request-fn
                                         (fn state-interstitial-handler-fn [request]
                                           (handler/get-query-chan-state-handler router-id interstitial-query-chan request)))))
+   :state-instance-startup-handler-fn (pc/fnk [[:daemons instance-startup-stats-maintainer]
+                                               [:state router-id]
+                                               wrap-secure-request-fn]
+                                        (let [query-chan (:query-chan instance-startup-stats-maintainer)]
+                                          (wrap-secure-request-fn
+                                            (fn state-instance-startup-handler-fn [request]
+                                              (handler/get-query-chan-state-handler router-id query-chan request)))))
    :state-kv-store-handler-fn (pc/fnk [[:curator kv-store]
                                        [:state router-id]
                                        wrap-secure-request-fn]

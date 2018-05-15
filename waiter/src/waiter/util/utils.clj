@@ -29,6 +29,7 @@
   (:import clojure.core.async.impl.channels.ManyToManyChannel
            clojure.lang.ExceptionInfo
            clojure.lang.PersistentQueue
+           com.codahale.metrics.Timer$Context
            java.io.OutputStreamWriter
            java.lang.Process
            java.net.ServerSocket

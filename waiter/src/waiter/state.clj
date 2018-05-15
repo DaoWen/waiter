@@ -1330,22 +1330,26 @@
 (defrecord InstanceTracker [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers])
 
 (defn- new-tracker-val
-  [service-id]
-  (map->InstanceTracker {:service-id service-id
-                         :known-instance-ids #{}
-                         ; TODO - figure out min instances from service-id
-                         :scheduling-instance-timer-contexts [{:schedule [(timers/start (metrics/waiter-timer "service-init-overhead" "schedule-time"))
+  [service-id service-id->service-description-fn]
+  (let [{:strs [min-instances]} (service-id->service-description-fn service-id)
+        ctxs (repeatedly
+               min-instances
+               (fn [] {:schedule [(timers/start (metrics/waiter-timer "service-init-overhead" "schedule-time"))
                                                                           (timers/start (metrics/service-timer service-id "service-init-overhead" "schedule-time"))]
                                                                :total [(timers/start (metrics/waiter-timer "service-init-overhead" "init-to-healthy-time"))
-                                                                       (timers/start (metrics/service-timer service-id "service-init-overhead" "init-to-healthy-time"))]}]
-                         :starting-instance-trackers []}))
+                               (timers/start (metrics/service-timer service-id "service-init-overhead" "init-to-healthy-time"))]}))]
+    (map->InstanceTracker
+      {:service-id service-id
+       :known-instance-ids #{}
+       :scheduling-instance-timer-contexts (vec ctxs)
+       :starting-instance-trackers []})))
 
 (defn update-instance-trackers
   "Track metrics on app instances, specifically schedule and startup times."
-  [service-instance-trackers new-service-ids removed-service-ids service-id->healthy-instances service-id->unhealthy-instances]
+  [service-instance-trackers new-service-ids removed-service-ids service-id->healthy-instances service-id->unhealthy-instances service-id->service-description-fn]
   (->> service-instance-trackers
        (remove (comp removed-service-ids :service-id))
-       (concat (mapv new-tracker-val new-service-ids))
+       (concat (mapv #(new-tracker-val % service-id->service-description-fn) new-service-ids))
        (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers]}]
                (let [healthy-instance-ids (->> service-id
                                                (get service-id->healthy-instances)
@@ -1365,9 +1369,9 @@
                                                    (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
                                                           (doseq [timer schedule-timers] (timers/stop timer))
                                                           {:instance-id instance-id
-                                                           :timers (concat [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
-                                                                            (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
-                                                                           total-timers)})
+                                                           :timers (into [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
+                                                                          (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
+                                                                         total-timers)})
                                                         new-instance-ids paired-timers)
                                                    (concat starting-instance-trackers)
                                                    (filterv (fn [{:keys [instance-id timers]}]
@@ -1386,6 +1390,7 @@
   Updated state for the router is read from `router-state-chan`."
   [router-state-chan service-id->service-description-fn]
   (let [exit-chan (async/chan 1)
+        query-chan (au/latest-chan)
         update-state-timer (metrics/waiter-timer "state" "instance-startup-stats-maintainer" "update-state")]
     (async/go
       (try
@@ -1412,13 +1417,21 @@
                            removed-service-ids (set/difference known-service-ids incoming-service-ids)
                            service-instance-trackers' (update-instance-trackers
                                                         service-instance-trackers new-service-ids removed-service-ids
-                                                        service-id->healthy-instances service-id->unhealthy-instances)]
+                                                        service-id->healthy-instances service-id->unhealthy-instances
+                                                        service-id->service-description-fn)]
                        {:known-service-ids incoming-service-ids
                         :service-instance-trackers service-instance-trackers'})))
+
+                  query-chan
+                  ([{:keys [cid response-chan]}]
+                   (cid/cinfo cid (str "returning current instance-startup state " current-state))
+                   (async/put! response-chan current-state)
+                    current-state)
                   :priority true)]
             (when new-state
               (recur new-state))))
         (catch Exception e
           (log/error e "Fatal error in instance-startup-stats-maintainer")
           (System/exit 1))))
-    {:exit-chan exit-chan}))
+    {:exit-chan exit-chan
+     :query-chan query-chan}))
