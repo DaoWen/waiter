@@ -1369,17 +1369,17 @@
                                                    (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
                                                           (doseq [timer schedule-timers] (timers/stop timer))
                                                           {:instance-id instance-id
-                                                           :timers (into [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
+                                                           :timer-contexts (into [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
                                                                           (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
                                                                          total-timers)})
                                                         new-instance-ids paired-timers)
                                                    (concat starting-instance-trackers)
-                                                   (filterv (fn [{:keys [instance-id timers]}]
+                                                   (filterv (fn [{:keys [instance-id timer-contexts]}]
                                                               (cond
                                                                 ;; Stop tracking any instances that disappeared.
                                                                 (not (contains? known-instance-ids' instance-id)) false
                                                                 ;; Report startup time for any tracked instances that are now healthy.
-                                                                (contains? healthy-instance-ids instance-id) (doseq [timer timers] (timers/stop timer))
+                                                                (contains? healthy-instance-ids instance-id) (doseq [tc timer-contexts] (timers/stop tc))
                                                                 ;; Continue tracking all other instances.
                                                                 :else true))))]
                  (->InstanceTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-trackers'))))))
