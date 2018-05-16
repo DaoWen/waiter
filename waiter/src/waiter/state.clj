@@ -1434,7 +1434,6 @@
             (when new-state
               (recur new-state))))
         (catch Exception e
-          (log/error e "Fatal error in instance-startup-stats-maintainer")
-          (System/exit 1))))
+          (log/error e "Error in instance-startup-stats-maintainer. Instance startup metrics will not be collected."))))
     {:exit-chan exit-chan
      :query-chan query-chan}))
