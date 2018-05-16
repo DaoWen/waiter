@@ -1335,8 +1335,8 @@
         ctxs (repeatedly
                min-instances
                (fn [] {:schedule [(timers/start (metrics/waiter-timer "service-init-overhead" "schedule-time"))
-                                                                          (timers/start (metrics/service-timer service-id "service-init-overhead" "schedule-time"))]
-                                                               :total [(timers/start (metrics/waiter-timer "service-init-overhead" "init-to-healthy-time"))
+                                  (timers/start (metrics/service-timer service-id "service-init-overhead" "schedule-time"))]
+                       :total [(timers/start (metrics/waiter-timer "service-init-overhead" "init-to-healthy-time"))
                                (timers/start (metrics/service-timer service-id "service-init-overhead" "init-to-healthy-time"))]}))]
     (map->InstanceTracker
       {:service-id service-id
@@ -1370,8 +1370,8 @@
                                                           (doseq [timer schedule-timers] (timers/stop timer))
                                                           {:instance-id instance-id
                                                            :timer-contexts (into [(timers/start (metrics/waiter-timer "service-init-overhead" "startup-time"))
-                                                                          (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
-                                                                         total-timers)})
+                                                                                  (timers/start (metrics/service-timer service-id "service-init-overhead" "startup-time"))]
+                                                                                 total-timers)})
                                                         new-instance-ids paired-timers)
                                                    (concat starting-instance-trackers)
                                                    (filterv (fn [{:keys [instance-id timer-contexts]}]
@@ -1426,7 +1426,7 @@
                   ([{:keys [cid response-chan]}]
                    (cid/cinfo cid (str "returning current instance-startup state " current-state))
                    (async/put! response-chan current-state)
-                    current-state)
+                   current-state)
                   :priority true)]
             (when new-state
               (recur new-state))))
