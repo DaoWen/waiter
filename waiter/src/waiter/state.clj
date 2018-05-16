@@ -1325,9 +1325,9 @@
     #(retrieve-peer-routers discovery router-chan)
     :delay-ms router-syncer-delay-ms))
 
-;; Support for tracking instance scheduling/startup time stats
+;; Support for tracking service instance scheduling/startup time stats
 
-(defrecord InstanceTracker [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers])
+(defrecord ServiceStartupTracker [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-trackers])
 
 (defn- new-tracker-val
   [service-id service-id->service-description-fn]
@@ -1338,7 +1338,7 @@
                                   (timers/start (metrics/service-timer service-id "service-init-overhead" "schedule-time"))]
                        :total [(timers/start (metrics/waiter-timer "service-init-overhead" "init-to-healthy-time"))
                                (timers/start (metrics/service-timer service-id "service-init-overhead" "init-to-healthy-time"))]}))]
-    (map->InstanceTracker
+    (map->ServiceStartupTracker
       {:service-id service-id
        :known-instance-ids #{}
        :scheduling-instance-timer-contexts (vec ctxs)
@@ -1382,7 +1382,7 @@
                                                                 (contains? healthy-instance-ids instance-id) (doseq [tc timer-contexts] (timers/stop tc))
                                                                 ;; Continue tracking all other instances.
                                                                 :else true))))]
-                 (->InstanceTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-trackers'))))))
+                 (->ServiceStartupTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-trackers'))))))
 
 (defn start-instance-startup-stats-maintainer
   "go block to collect metrics on the schedule/startup overhead of waiter services.
