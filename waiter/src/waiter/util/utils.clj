@@ -115,6 +115,11 @@
     (log/debug "generate-secret-word" [src-id dest-id] "->" secret-word)
     secret-word))
 
+(defmacro json-counted-vector
+  "Return a vector of the arguments that will be rendered as an item count in a json response."
+  [& xs]
+  `^:count-only [~@xs])
+
 (defn stringify-elements
   [k v]
   (cond
