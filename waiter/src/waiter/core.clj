@@ -872,7 +872,7 @@
                                         (-> router-state-maintainer
                                             (get-in [:maintainer-chans :router-state-push-mult])
                                             (async/tap (au/latest-chan))
-                                            (state/start-instance-startup-stats-maintainer service-id->service-description-fn)))
+                                            (scheduler/start-instance-startup-stats-maintainer service-id->service-description-fn)))
    :interstitial-maintainer (pc/fnk [[:routines service-id->service-description-fn]
                                      [:state interstitial-state-atom]
                                      scheduler-maintainer]
