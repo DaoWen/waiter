@@ -1444,22 +1444,34 @@
       (is (= test-instance-id instance-id))
       (is (not (t/before? received-time (t/plus current-time (t/millis blacklist-period-ms))))))))
 
-(defn check-trackers
+(defmacro check-trackers
   [all-trackers assertion-maps]
-  (for [[tracker assertion-map] (mapv vector all-trackers assertion-maps)]
-    (let [{:keys [service-id known-instance-ids scheduling-instance-count starting-instance-ids]
-           :or {known-instance-ids #{} scheduling-instance-count 0 starting-instance-ids []}} assertion-map
-          {:keys [scheduling-instance-timer-contexts starting-instance-trackers]} tracker]
-      (println known-instance-ids)
-      (is (= service-id (:service-id tracker)))
-      (is (= known-instance-ids (:known-instance-ids tracker)))
-      (is (= scheduling-instance-count (count scheduling-instance-timer-contexts)))
-      (doseq [{:keys [schedule total]} scheduling-instance-timer-contexts]
-        (is (= 2 (count schedule)))
-        (is (= 2 (count total))))
-      (is (= (sort starting-instance-ids) (->> starting-instance-trackers (pc/map-vals :instance-id) sort)))
-      (doseq [{:keys [timer-contexts]} starting-instance-trackers]
-        (is (= 4 (count timer-contexts)))))))
+  `(let [assertion-maps# ~assertion-maps
+         all-trackers# ~all-trackers]
+     (is (= (count all-trackers#) (count assertion-maps#)))
+     (doseq [tracker# all-trackers#]
+       (let [{service-id# :service-id
+              actual-known-instance-ids# :known-instance-ids
+              actual-scheduling-instance-timer-contexts# :scheduling-instance-timer-contexts
+              actual-starting-instance-context-maps# :starting-instance-context-maps} tracker#
+             {expected-service-id# :service-id
+              expected-known-instance-ids# :known-instance-ids
+              expected-scheduling-instance-count# :scheduling-instance-count
+              expected-starting-instance-ids# :starting-instance-ids
+              :or {expected-known-instance-ids# #{}
+                   expected-scheduling-instance-count# 0
+                   expected-starting-instance-ids# []} :as assertion-map#} (get assertion-maps# service-id#)]
+         (println service-id#)
+         (is (= expected-known-instance-ids# actual-known-instance-ids#))
+         (is (= expected-scheduling-instance-count# (count actual-scheduling-instance-timer-contexts#)))
+         (doseq [{actual-scheduled# :schedule actual-total# :total} actual-scheduling-instance-timer-contexts#]
+           (println "starting instance")
+           (is (= 2 (count actual-scheduled#)))
+           (is (= 2 (count actual-total#))))
+         (is (= (sort expected-starting-instance-ids#)
+                (->> actual-starting-instance-context-maps# (pc/map-vals :instance-id) sort)))
+         (doseq [{actual-timer-contexts# :timer-contexts} actual-starting-instance-context-maps#]
+           (is (= 4 (count actual-timer-contexts#))))))))
 
 (deftest test-update-instance-trackers
   (let [empty-trackers []
@@ -1487,7 +1499,8 @@
         ]
     (is (= empty-trackers empty-trackers'))
     (is (= empty-trackers empty-trackers''))
-    (check-trackers trackers-1 [{:scheduling-instance-count 2} {:scheduling-instance-count 2}])
+    (check-trackers trackers-1 {"service-1" {:scheduling-instance-count 1}
+                                "service-2" {:scheduling-instance-count 1}})
     (is (= empty-trackers trackers-2))
 
     ))
