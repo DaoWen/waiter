@@ -1443,3 +1443,51 @@
           received-time (t/now)]
       (is (= test-instance-id instance-id))
       (is (not (t/before? received-time (t/plus current-time (t/millis blacklist-period-ms))))))))
+
+(defn check-trackers
+  [all-trackers assertion-maps]
+  (for [[tracker assertion-map] (mapv vector all-trackers assertion-maps)]
+    (let [{:keys [service-id known-instance-ids scheduling-instance-count starting-instance-ids]
+           :or {known-instance-ids #{} scheduling-instance-count 0 starting-instance-ids []}} assertion-map
+          {:keys [scheduling-instance-timer-contexts starting-instance-trackers]} tracker]
+      (println known-instance-ids)
+      (is (= service-id (:service-id tracker)))
+      (is (= known-instance-ids (:known-instance-ids tracker)))
+      (is (= scheduling-instance-count (count scheduling-instance-timer-contexts)))
+      (doseq [{:keys [schedule total]} scheduling-instance-timer-contexts]
+        (is (= 2 (count schedule)))
+        (is (= 2 (count total))))
+      (is (= (sort starting-instance-ids) (->> starting-instance-trackers (pc/map-vals :instance-id) sort)))
+      (doseq [{:keys [timer-contexts]} starting-instance-trackers]
+        (is (= 4 (count timer-contexts)))))))
+
+(deftest test-update-instance-trackers
+  (let [empty-trackers []
+        empty-new-service-ids #{}
+        empty-removed-service-ids #{}
+        empty-service-id->healthy-instances {}
+        empty-service-id->unhealthy-instances {}
+        empty-service-id->service-description-fn {}
+        default-service-id->service-description-fn (constantly {"min-instances" 1})
+        empty-trackers' (update-instance-trackers
+                          empty-trackers empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
+                          empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
+        empty-trackers'' (update-instance-trackers
+                           empty-trackers empty-new-service-ids #{"service-foo"} empty-service-id->healthy-instances
+                           empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
+        trackers-1 (update-instance-trackers
+                     empty-trackers #{"service-1" "service-2"} empty-removed-service-ids empty-service-id->healthy-instances
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+        trackers-2 (update-instance-trackers
+                     trackers-1 empty-new-service-ids #{"service-1" "service-2"} empty-service-id->healthy-instances
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+        trackers-3 (update-instance-trackers
+                     trackers-1 #{"service-3"} #{"service-2"} empty-service-id->healthy-instances
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+        ]
+    (is (= empty-trackers empty-trackers'))
+    (is (= empty-trackers empty-trackers''))
+    (check-trackers trackers-1 [{:scheduling-instance-count 2} {:scheduling-instance-count 2}])
+    (is (= empty-trackers trackers-2))
+
+    ))
