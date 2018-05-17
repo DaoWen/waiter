@@ -676,18 +676,19 @@
        (remove (comp removed-service-ids :service-id))
        (concat (mapv #(new-tracker-val % service-id->service-description-fn) new-service-ids))
        (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-context-maps]}]
-               (let [healthy-instance-ids (->> service-id
-                                               (get service-id->healthy-instances)
-                                               (map :id)
-                                               set)
+               (let [healthy-instances (get service-id->healthy-instances service-id)
+                     instance-id->healthy-instance (pc/map-from-vals :id healthy-instances)
+                     healthy-instance-ids (->> healthy-instances (map :id) set)
                      known-instance-ids' (->> service-id
                                               (get service-id->unhealthy-instances)
                                               (map :id)
                                               (into healthy-instance-ids))
-                     new-instance-ids (set/difference known-instance-ids' known-instance-ids)
+                     new-instance-ids (->> (set/difference known-instance-ids' known-instance-ids)
+                                           (sort-by :started-at))
+                     unmatched-instance-count (- (count new-instance-ids)
+                                                 (count scheduling-instance-timer-contexts))
                      ;; Pair up all of the newly-scheduled instances with their timers.
                      ;; NOTE: Using split-at allows us to drop the new-instances if we're somehow missing the corresponding timers
-                     ;; TODO - sort scheduling-instance-timer-contexts by start time?
                      [paired-timers scheduling-instance-timer-contexts'] (split-at (count new-instance-ids) scheduling-instance-timer-contexts)
                      starting-instance-context-maps' (->>
                                                        ;; Start timers for startup time of newly-scheduled instances.
@@ -710,6 +711,8 @@
                                                                     (contains? healthy-instance-ids instance-id) (doseq [tc timer-contexts] (timers/stop tc))
                                                                     ;; Continue tracking all other instances.
                                                                     :else true))))]
+                 (when (pos? unmatched-instance-count)
+                   (log/warn "Unmatched instances discovered in startup metric loop" unmatched-instance-count))
                  (->ServiceStartupTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-context-maps'))))))
 
 (defn start-instance-startup-stats-maintainer
