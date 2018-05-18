@@ -567,7 +567,7 @@
          (doseq [{actual-timer-contexts# :timer-contexts} actual-starting-instance-context-maps#]
            (is (= 4 (count actual-timer-contexts#))))))))
 
-(deftest test-update-instance-trackers
+(deftest test-update-instance-launch-trackers
   (let [empty-trackers []
         empty-new-service-ids #{}
         empty-removed-service-ids #{}
@@ -576,38 +576,36 @@
         empty-service-id->service-description-fn {}
         default-service-id->service-description-fn (constantly {"min-instances" 1})
         alternate-service-id->service-description-fn (constantly {"min-instances" 3})
-        empty-trackers' (update-instance-trackers
+        empty-trackers' (update-instance-launch-trackers
                           empty-trackers empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
                           empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
-        empty-trackers'' (update-instance-trackers
+        empty-trackers'' (update-instance-launch-trackers
                            empty-trackers empty-new-service-ids #{"service-foo"} empty-service-id->healthy-instances
                            empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
-        ;;;;;; DELETE
-        ;;;;;; /DELETE
-        trackers-1 (update-instance-trackers
+        trackers-1 (update-instance-launch-trackers
                      empty-trackers #{"service-1" "service-2"} empty-removed-service-ids empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
-        trackers-2 (update-instance-trackers
+        trackers-2 (update-instance-launch-trackers
                      trackers-1 empty-new-service-ids #{"service-1" "service-2"} empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
-        trackers-3 (update-instance-trackers
+        trackers-3 (update-instance-launch-trackers
                      trackers-1 #{"service-3"} #{"service-2"} empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
-        trackers-4 (update-instance-trackers
+        trackers-4 (update-instance-launch-trackers
                      trackers-3 empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
                      {"service-1" [{:id "inst-1.1"}]} default-service-id->service-description-fn)
-        trackers-5 (update-instance-trackers
+        trackers-5 (update-instance-launch-trackers
                      trackers-4 #{"service-4"} empty-removed-service-ids
                      {"service-1" [{:id "inst-1.1"}]
                       "service-3" [{:id "inst-3.1"}]}
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
-        trackers-6 (update-instance-trackers
+        trackers-6 (update-instance-launch-trackers
                      trackers-5 #{"service-5"} #{"service-3"}
                      {"service-1" [{:id "inst-1.1"}]
                       "service-4" [{:id "inst-4.1"}]}
                      {"service-5" [{:id "inst-5.1"}]}
                      alternate-service-id->service-description-fn)
-        trackers-7 (update-instance-trackers
+        trackers-7 (update-instance-launch-trackers
                      empty-trackers empty-new-service-ids #{"service-1" "service-4" "service-5"} empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)]
     (is (= empty-trackers empty-trackers'))

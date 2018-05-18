@@ -99,7 +99,7 @@
                      "state" [["" :state-all-handler-fn]
                               ["/fallback" :state-fallback-handler-fn]
                               ["/interstitial" :state-interstitial-handler-fn]
-                              ["/instance-startup" :state-instance-startup-handler-fn]
+                              ["/instance-launch-metrics" :state-instance-launch-handler-fn]
                               ["/kv-store" :state-kv-store-handler-fn]
                               ["/leader" :state-leader-handler-fn]
                               ["/local-usage" :state-local-usage-handler-fn]
@@ -867,12 +867,12 @@
                                      (metrics/transient-metrics-gc scheduler-state-chan local-usage-agent service-gc-go-routine metrics-config)]
                                  (metrics/transient-metrics-data-producer service-id->metrics-chan service-id->metrics-fn metrics-config)
                                  metrics-gc-chans))
-   :instance-startup-stats-maintainer (pc/fnk [[:routines service-id->service-description-fn]
-                                               router-state-maintainer]
-                                        (-> router-state-maintainer
-                                            (get-in [:maintainer-chans :router-state-push-mult])
-                                            (async/tap (au/latest-chan))
-                                            (scheduler/start-instance-startup-stats-maintainer service-id->service-description-fn)))
+   :instance-launch-stats-maintainer (pc/fnk [[:routines service-id->service-description-fn]
+                                              router-state-maintainer]
+                                       (-> router-state-maintainer
+                                           (get-in [:maintainer-chans :router-state-push-mult])
+                                           (async/tap (au/latest-chan))
+                                           (scheduler/start-instance-launch-stats-maintainer service-id->service-description-fn)))
    :interstitial-maintainer (pc/fnk [[:routines service-id->service-description-fn]
                                      [:state interstitial-state-atom]
                                      scheduler-maintainer]
@@ -1175,13 +1175,13 @@
                                       (wrap-secure-request-fn
                                         (fn state-interstitial-handler-fn [request]
                                           (handler/get-query-chan-state-handler router-id interstitial-query-chan request)))))
-   :state-instance-startup-handler-fn (pc/fnk [[:daemons instance-startup-stats-maintainer]
-                                               [:state router-id]
-                                               wrap-secure-request-fn]
-                                        (let [query-chan (:query-chan instance-startup-stats-maintainer)]
-                                          (wrap-secure-request-fn
-                                            (fn state-instance-startup-handler-fn [request]
-                                              (handler/get-query-chan-state-handler router-id query-chan request)))))
+   :state-instance-launch-handler-fn (pc/fnk [[:daemons instance-launch-stats-maintainer]
+                                              [:state router-id]
+                                              wrap-secure-request-fn]
+                                       (let [query-chan (:query-chan instance-launch-stats-maintainer)]
+                                         (wrap-secure-request-fn
+                                           (fn state-instance-launch-handler-fn [request]
+                                             (handler/get-query-chan-state-handler router-id query-chan request)))))
    :state-kv-store-handler-fn (pc/fnk [[:curator kv-store]
                                        [:state router-id]
                                        wrap-secure-request-fn]
