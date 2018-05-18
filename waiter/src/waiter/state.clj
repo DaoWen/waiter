@@ -790,26 +790,22 @@
         update-state-timer (metrics/waiter-timer "state" "service-chan-maintainer" "update-state")]
     (async/go
       (try
-        (loop [{:keys [service-id->channel-map last-state-update-time] :as current-state}
-               {:service-id->channel-map (or (:service-id->channel-map initial-state) {})
-                :last-state-update-time (:last-state-update-time initial-state)}]
+        (loop [service-id->channel-map (or (:service-id->channel-map initial-state) {})
+               last-state-update-time (:last-state-update-time initial-state)]
           (let [new-state
                 (async/alt!
                   exit-chan
                   ([message]
-                    (if (= :exit message)
-                      (do
-                        (log/warn "stopping service-chan-maintainer")
-                        (comment "Return nil to exit the loop"))
-                      current-state))
+                    (log/warn "stopping service-chan-maintainer")
+                    (when (not= :exit message)
+                      [service-id->channel-map last-state-update-time]))
 
                   state-chan
                   ([router-state]
                     (timers/start-stop-time!
                       update-state-timer
-                      (let [{:keys [service-id->deployment-error service-id->expired-instances
-                                    service-id->healthy-instances service-id->my-instance->slots
-                                    service-id->starting-instances service-id->unhealthy-instances time]} router-state
+                      (let [{:keys [service-id->my-instance->slots service-id->unhealthy-instances service-id->expired-instances
+                                    service-id->starting-instances service-id->deployment-error time]} router-state
                             incoming-service-ids (set (keys service-id->my-instance->slots))
                             known-service-ids (set (keys service-id->channel-map))
                             new-service-ids (set/difference incoming-service-ids known-service-ids)
@@ -842,8 +838,7 @@
                                                               :deployment-error deployment-error}]
                                             [update-state time]))
                               (async/put! update-state-chan [{} time]))))
-                        {:service-id->channel-map service-id->channel-map''
-                         :last-state-update-time time})))
+                        [service-id->channel-map'' time])))
 
                   request-chan
                   ([message]
@@ -857,7 +852,7 @@
                             (cid/cdebug cid "[service-chan-maintainer] no channel map found for" service-id)
                             (counters/inc! (metrics/service-counter service-id "maintainer" "not-found"))
                             (async/close! response-chan)))
-                        current-state)))
+                        [service-id->channel-map last-state-update-time])))
 
                   query-service-maintainer-chan
                   ([message]
@@ -868,10 +863,10 @@
                                                    :service-id->channel-map service-id->channel-map})
                         (async/put! response-chan {:last-state-update-time last-state-update-time
                                                    :maintainer-chan-available (contains? service-id->channel-map service-id)}))
-                      current-state))
+                      [service-id->channel-map last-state-update-time]))
                   :priority true)]
             (when new-state
-              (recur new-state))))
+              (recur (first new-state) (second new-state)))))
         (catch Exception e
           (log/error e "Fatal error in service-chan-maintainer")
           (System/exit 1))))
