@@ -608,22 +608,23 @@
         trackers-7 (update-instance-launch-trackers
                      empty-trackers empty-new-service-ids #{"service-1" "service-4" "service-5"} empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)]
-    (is (= empty-trackers empty-trackers'))
-    (is (= empty-trackers empty-trackers''))
-    (check-trackers trackers-1 {"service-1" {:scheduling-instance-count 1}
-                                "service-2" {:scheduling-instance-count 1}})
-    (is (= empty-trackers trackers-2))
-    (check-trackers trackers-3 {"service-1" {:scheduling-instance-count 1}
-                                "service-3" {:scheduling-instance-count 1}})
-    (check-trackers trackers-4 {"service-1" {:known-instance-ids #{"inst-1.1"}
-                                             :starting-instance-ids ["inst-1.1"]}
-                                "service-3" {:scheduling-instance-count 1}})
-    (check-trackers trackers-5 {"service-1" {:known-instance-ids #{"inst-1.1"}}
-                                "service-3" {:known-instance-ids #{"inst-3.1"}}
-                                "service-4" {:scheduling-instance-count 1}})
-    (check-trackers trackers-6 {"service-1" {:known-instance-ids #{"inst-1.1"}}
-                                "service-4" {:known-instance-ids #{"inst-4.1"}}
-                                "service-5" {:known-instance-ids #{"inst-5.1"}
-                                             :scheduling-instance-count 2
-                                             :starting-instance-ids ["inst-5.1"]}})
-    (is (= empty-trackers trackers-7))))
+    (testing "test-update-instance-launch-trackers"
+      (is (= empty-trackers empty-trackers'))
+      (is (= empty-trackers empty-trackers''))
+      (check-trackers trackers-1 {"service-1" {:scheduling-instance-count 1}
+                                  "service-2" {:scheduling-instance-count 1}})
+      (is (= empty-trackers trackers-2))
+      (check-trackers trackers-3 {"service-1" {:scheduling-instance-count 1}
+                                  "service-3" {:scheduling-instance-count 1}})
+      (check-trackers trackers-4 {"service-1" {:known-instance-ids #{"inst-1.1"}
+                                               :starting-instance-ids ["inst-1.1"]}
+                                  "service-3" {:scheduling-instance-count 1}})
+      (check-trackers trackers-5 {"service-1" {:known-instance-ids #{"inst-1.1"}}
+                                  "service-3" {:known-instance-ids #{"inst-3.1"}}
+                                  "service-4" {:scheduling-instance-count 1}})
+      (check-trackers trackers-6 {"service-1" {:known-instance-ids #{"inst-1.1"}}
+                                  "service-4" {:known-instance-ids #{"inst-4.1"}}
+                                  "service-5" {:known-instance-ids #{"inst-5.1"}
+                                               :scheduling-instance-count 2
+                                               :starting-instance-ids ["inst-5.1"]}})
+      (is (= empty-trackers trackers-7)))))
