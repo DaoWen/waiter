@@ -561,11 +561,17 @@
          (is (= expected-scheduling-instance-count# (count actual-scheduling-instance-timer-contexts#)))
          (doseq [{actual-scheduled# :schedule actual-total# :total} actual-scheduling-instance-timer-contexts#]
            (is (= 2 (count actual-scheduled#)))
-           (is (= 2 (count actual-total#))))
+           (is (= 1 (count actual-total#))))
          (is (= (sort expected-starting-instance-ids#)
                 (->> actual-starting-instance-context-maps# (map :instance-id) sort)))
          (doseq [{actual-timer-contexts# :timer-contexts} actual-starting-instance-context-maps#]
-           (is (= 4 (count actual-timer-contexts#))))))))
+           (is (= 2 (count actual-timer-contexts#))))))))
+
+(defn- make-service-instance
+  [service-number instance-number]
+  {:id (str "inst-" service-number \. instance-number)
+   :service-id (str "service-" service-number)
+   :started-at (+ service-number instance-number)})
 
 (deftest test-update-instance-launch-trackers
   (let [empty-trackers []
@@ -593,20 +599,38 @@
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
         trackers-4 (update-instance-launch-trackers
                      trackers-3 empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
-                     {"service-1" [{:id "inst-1.1"}]} default-service-id->service-description-fn)
+                     {"service-1" [(make-service-instance 1 1)]} default-service-id->service-description-fn)
         trackers-5 (update-instance-launch-trackers
                      trackers-4 #{"service-4"} empty-removed-service-ids
-                     {"service-1" [{:id "inst-1.1"}]
-                      "service-3" [{:id "inst-3.1"}]}
+                     {"service-1" [(make-service-instance 1 1)]
+                      "service-3" [(make-service-instance 3 1)]}
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)
         trackers-6 (update-instance-launch-trackers
                      trackers-5 #{"service-5"} #{"service-3"}
-                     {"service-1" [{:id "inst-1.1"}]
-                      "service-4" [{:id "inst-4.1"}]}
-                     {"service-5" [{:id "inst-5.1"}]}
+                     {"service-1" [(make-service-instance 1 1)]
+                      "service-4" [(make-service-instance 4 1)]}
+                     {"service-5" [(make-service-instance 5 1)]}
                      alternate-service-id->service-description-fn)
         trackers-7 (update-instance-launch-trackers
-                     empty-trackers empty-new-service-ids #{"service-1" "service-4" "service-5"} empty-service-id->healthy-instances
+                     trackers-6 empty-new-service-ids empty-removed-service-ids
+                     empty-service-id->healthy-instances
+                     {"service-1" [(make-service-instance 1 1)]
+                      "service-4" [(make-service-instance 4 1)]
+                      "service-5" [(make-service-instance 5 1)
+                                   (make-service-instance 5 2)
+                                   (make-service-instance 5 3)]}
+                     default-service-id->service-description-fn)
+        trackers-8 (update-instance-launch-trackers
+                     trackers-7 empty-new-service-ids empty-removed-service-ids
+                     {"service-1" [(make-service-instance 1 1)]
+                      "service-4" [(make-service-instance 4 1)]
+                      "service-5" [(make-service-instance 5 1)
+                                   (make-service-instance 5 2)
+                                   (make-service-instance 5 3)]}
+                     empty-service-id->unhealthy-instances
+                     default-service-id->service-description-fn)
+        trackers-9 (update-instance-launch-trackers
+                     trackers-8 empty-new-service-ids #{"service-1" "service-4" "service-5"} empty-service-id->healthy-instances
                      empty-service-id->unhealthy-instances default-service-id->service-description-fn)]
     (testing "test-update-instance-launch-trackers"
       (is (= empty-trackers empty-trackers'))
@@ -627,4 +651,11 @@
                                   "service-5" {:known-instance-ids #{"inst-5.1"}
                                                :scheduling-instance-count 2
                                                :starting-instance-ids ["inst-5.1"]}})
-      (is (= empty-trackers trackers-7)))))
+      (check-trackers trackers-7 {"service-1" {:known-instance-ids #{"inst-1.1"}}
+                                  "service-4" {:known-instance-ids #{"inst-4.1"}}
+                                  "service-5" {:known-instance-ids #{"inst-5.1" "inst-5.2" "inst-5.3"}
+                                               :starting-instance-ids ["inst-5.1" "inst-5.2" "inst-5.3"]}})
+      (check-trackers trackers-8 {"service-1" {:known-instance-ids #{"inst-1.1"}}
+                                  "service-4" {:known-instance-ids #{"inst-4.1"}}
+                                  "service-5" {:known-instance-ids #{"inst-5.1" "inst-5.2" "inst-5.3"}}})
+      (is (= empty-trackers trackers-9)))))

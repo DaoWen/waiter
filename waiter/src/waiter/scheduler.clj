@@ -647,8 +647,6 @@
 
 ;; Support for tracking service instance launching time stats
 
-(defrecord ServiceInstancesLaunchTracker [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-context-maps])
-
 (defn- new-tracker-val
   [service-id service-id->service-description-fn]
   (let [{:strs [min-instances]} (service-id->service-description-fn service-id)
@@ -658,13 +656,25 @@
                                    (timers/start (metrics/waiter-timer "service-launch-overhead" "schedule-time"))
                                    (timers/start (metrics/service-timer service-id "service-launch-overhead" "schedule-time")))
                        :total (utils/json-counted-vector
-                                (timers/start (metrics/waiter-timer "service-launch-overhead" "init-to-healthy-time"))
                                 (timers/start (metrics/service-timer service-id "service-launch-overhead" "init-to-healthy-time")))}))]
-    (map->ServiceInstancesLaunchTracker
-      {:service-id service-id
-       :known-instance-ids #{}
-       :scheduling-instance-timer-contexts (vec ctxs)
-       :starting-instance-context-maps []})))
+    {:known-instance-ids #{}
+     :scheduling-instance-timer-contexts (vec ctxs)
+     :service-id service-id
+     :starting-instance-context-maps []}))
+
+(defn process-scheduled-instances
+  "Start timers for startup time of newly-scheduled instances."
+  [new-instances paired-timers]
+  ;; NOTE: Since Waiter only scales down by killing known instances,
+  ;; waiting-to-be-scheduled instances are not killed (unlike starting instances).
+  (map (fn [{:keys [id service-id]} {schedule-timers :schedule total-timers :total}]
+         (doseq [timer schedule-timers]
+           (timers/stop timer))
+         {:instance-id id
+          :timer-contexts (->> (metrics/service-timer service-id "service-launch-overhead" "startup-time")
+                               (timers/start)
+                               (conj total-timers))})
+       new-instances paired-timers))
 
 (defn update-instance-launch-trackers
   "Track metrics on app instances, specifically schedule and startup times."
@@ -672,45 +682,42 @@
   (->> service-instance-launch-trackers
        (remove (comp removed-service-ids :service-id))
        (concat (mapv #(new-tracker-val % service-id->service-description-fn) new-service-ids))
-       (mapv (fn [{:keys [service-id known-instance-ids scheduling-instance-timer-contexts starting-instance-context-maps]}]
+       (mapv (fn [{:keys [known-instance-ids scheduling-instance-timer-contexts service-id starting-instance-context-maps]}]
                (let [healthy-instances (get service-id->healthy-instances service-id)
-                     instance-id->healthy-instance (pc/map-from-vals :id healthy-instances)
-                     healthy-instance-ids (->> healthy-instances (map :id) set)
-                     known-instance-ids' (->> service-id
-                                              (get service-id->unhealthy-instances)
-                                              (map :id)
-                                              (into healthy-instance-ids))
-                     new-instance-ids (->> (set/difference known-instance-ids' known-instance-ids)
-                                           (sort-by (comp :started-at instance-id->healthy-instance)))
-                     unmatched-instance-count (- (count new-instance-ids)
+                     known-instances' (->> service-id
+                                           (get service-id->unhealthy-instances)
+                                           (into healthy-instances))
+                     previously-known-instance? (comp known-instance-ids :id)
+                     new-instances (->> known-instances'
+                                        (remove previously-known-instance?)
+                                        (sort-by :started-at))
+                     healthy-instance-id? (->> healthy-instances (map :id) set)
+                     known-instance-ids' (->> known-instances' (map :id) set)
+                     removed-instance-id? (complement known-instance-ids')
+                     unmatched-instance-count (- (count new-instances)
                                                  (count scheduling-instance-timer-contexts))
                      ;; Pair up all of the newly-scheduled instances with their timers.
                      ;; NOTE: Using split-at allows us to drop the new-instances if we're somehow missing the corresponding timers
-                     [paired-timers scheduling-instance-timer-contexts'] (split-at (count new-instance-ids) scheduling-instance-timer-contexts)
+                     [paired-timers scheduling-instance-timer-contexts'] (split-at (count new-instances) scheduling-instance-timer-contexts)
                      starting-instance-context-maps' (->>
-                                                       ;; Start timers for startup time of newly-scheduled instances.
-                                                       ;; NOTE: Since Waiter only scales down by killing known instances, waiting-to-be-scheduled instances are not removed (unlike starting instances).
-                                                       (map (fn [instance-id {schedule-timers :schedule total-timers :total}]
-                                                              (doseq [timer schedule-timers]
-                                                                (timers/stop timer))
-                                                              {:instance-id instance-id
-                                                               :timer-contexts (into (utils/json-counted-vector
-                                                                                       (timers/start (metrics/waiter-timer "service-launch-overhead" "startup-time"))
-                                                                                       (timers/start (metrics/service-timer service-id "service-launch-overhead" "startup-time")))
-                                                                                     total-timers)})
-                                                            new-instance-ids paired-timers)
+                                                       (process-scheduled-instances new-instances paired-timers)
                                                        (concat starting-instance-context-maps)
                                                        (filterv (fn [{:keys [instance-id timer-contexts]}]
                                                                   (cond
                                                                     ;; Stop tracking any instances that disappeared.
-                                                                    (not (contains? known-instance-ids' instance-id)) false
+                                                                    (removed-instance-id? instance-id) false
                                                                     ;; Report startup time for any tracked instances that are now healthy.
-                                                                    (contains? healthy-instance-ids instance-id) (doseq [tc timer-contexts] (timers/stop tc))
+                                                                    (healthy-instance-id? instance-id)
+                                                                    (doseq [tc timer-contexts]
+                                                                      (timers/stop tc))
                                                                     ;; Continue tracking all other instances.
                                                                     :else true))))]
                  (when (pos? unmatched-instance-count)
                    (log/warn "Unmatched instances discovered in instance launch metric loop" unmatched-instance-count))
-                 (->ServiceInstancesLaunchTracker service-id known-instance-ids' scheduling-instance-timer-contexts' starting-instance-context-maps'))))))
+                 {:known-instance-ids known-instance-ids'
+                  :scheduling-instance-timer-contexts scheduling-instance-timer-contexts'
+                  :service-id service-id
+                  :starting-instance-context-maps starting-instance-context-maps'})))))
 
 (defn start-instance-launch-stats-maintainer
   "go block to collect metrics on the instance launch overhead of waiter services.
