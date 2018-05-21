@@ -681,7 +681,7 @@
                                               (map :id)
                                               (into healthy-instance-ids))
                      new-instance-ids (->> (set/difference known-instance-ids' known-instance-ids)
-                                           (sort-by :started-at))
+                                           (sort-by (comp :started-at instance-id->healthy-instance)))
                      unmatched-instance-count (- (count new-instance-ids)
                                                  (count scheduling-instance-timer-contexts))
                      ;; Pair up all of the newly-scheduled instances with their timers.
