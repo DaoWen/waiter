@@ -23,6 +23,7 @@
             [slingshot.slingshot :as ss]
             [waiter.core :as core]
             [waiter.curator :as curator]
+            [waiter.metrics :as metrics]
             [waiter.scheduler :refer :all]
             [waiter.util.date-utils :as du])
   (:import (java.net ConnectException SocketTimeoutException)
@@ -559,9 +560,8 @@
                    expected-starting-instance-ids# []} :as assertion-map#} (get assertion-maps# service-id#)]
          (is (= expected-known-instance-ids# actual-known-instance-ids#))
          (is (= expected-scheduling-instance-count# (count actual-scheduling-instance-timer-contexts#)))
-         (doseq [{actual-scheduled# :schedule actual-total# :total} actual-scheduling-instance-timer-contexts#]
-           (is (= 2 (count actual-scheduled#)))
-           (is (= 1 (count actual-total#))))
+         (doseq [actual-scheduled# actual-scheduling-instance-timer-contexts#]
+           (is (= 2 (count actual-scheduled#))))
          (is (= (sort expected-starting-instance-ids#)
                 (->> actual-starting-instance-context-maps# (map :instance-id) sort)))
          (doseq [{actual-timer-contexts# :timer-contexts} actual-starting-instance-context-maps#]
@@ -582,35 +582,36 @@
         empty-service-id->service-description-fn {}
         default-service-id->service-description-fn (constantly {"min-instances" 1})
         alternate-service-id->service-description-fn (constantly {"min-instances" 3})
+        waiter-timer (metrics/waiter-timer "service-launch-overhead" "schedule-time")
         empty-trackers' (update-instance-launch-trackers
                           empty-trackers empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
-                          empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
+                          empty-service-id->unhealthy-instances empty-service-id->service-description-fn waiter-timer)
         empty-trackers'' (update-instance-launch-trackers
                            empty-trackers empty-new-service-ids #{"service-foo"} empty-service-id->healthy-instances
-                           empty-service-id->unhealthy-instances empty-service-id->service-description-fn)
+                           empty-service-id->unhealthy-instances empty-service-id->service-description-fn waiter-timer)
         trackers-1 (update-instance-launch-trackers
                      empty-trackers #{"service-1" "service-2"} empty-removed-service-ids empty-service-id->healthy-instances
-                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn waiter-timer)
         trackers-2 (update-instance-launch-trackers
                      trackers-1 empty-new-service-ids #{"service-1" "service-2"} empty-service-id->healthy-instances
-                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn waiter-timer)
         trackers-3 (update-instance-launch-trackers
                      trackers-1 #{"service-3"} #{"service-2"} empty-service-id->healthy-instances
-                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn waiter-timer)
         trackers-4 (update-instance-launch-trackers
                      trackers-3 empty-new-service-ids empty-removed-service-ids empty-service-id->healthy-instances
-                     {"service-1" [(make-service-instance 1 1)]} default-service-id->service-description-fn)
+                     {"service-1" [(make-service-instance 1 1)]} default-service-id->service-description-fn waiter-timer)
         trackers-5 (update-instance-launch-trackers
                      trackers-4 #{"service-4"} empty-removed-service-ids
                      {"service-1" [(make-service-instance 1 1)]
                       "service-3" [(make-service-instance 3 1)]}
-                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn waiter-timer)
         trackers-6 (update-instance-launch-trackers
                      trackers-5 #{"service-5"} #{"service-3"}
                      {"service-1" [(make-service-instance 1 1)]
                       "service-4" [(make-service-instance 4 1)]}
                      {"service-5" [(make-service-instance 5 1)]}
-                     alternate-service-id->service-description-fn)
+                     alternate-service-id->service-description-fn waiter-timer)
         trackers-7 (update-instance-launch-trackers
                      trackers-6 empty-new-service-ids empty-removed-service-ids
                      empty-service-id->healthy-instances
@@ -619,7 +620,7 @@
                       "service-5" [(make-service-instance 5 1)
                                    (make-service-instance 5 2)
                                    (make-service-instance 5 3)]}
-                     default-service-id->service-description-fn)
+                     default-service-id->service-description-fn waiter-timer)
         trackers-8 (update-instance-launch-trackers
                      trackers-7 empty-new-service-ids empty-removed-service-ids
                      {"service-1" [(make-service-instance 1 1)]
@@ -628,10 +629,10 @@
                                    (make-service-instance 5 2)
                                    (make-service-instance 5 3)]}
                      empty-service-id->unhealthy-instances
-                     default-service-id->service-description-fn)
+                     default-service-id->service-description-fn waiter-timer)
         trackers-9 (update-instance-launch-trackers
                      trackers-8 empty-new-service-ids #{"service-1" "service-4" "service-5"} empty-service-id->healthy-instances
-                     empty-service-id->unhealthy-instances default-service-id->service-description-fn)]
+                     empty-service-id->unhealthy-instances default-service-id->service-description-fn waiter-timer)]
     (testing "test-update-instance-launch-trackers"
       (is (= empty-trackers empty-trackers'))
       (is (= empty-trackers empty-trackers''))
