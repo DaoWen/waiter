@@ -9,8 +9,7 @@
 ;;       actual or intended publication of such source code.
 ;;
 (ns waiter.util.timer-context
-  (:require [clj-time.core :as t]
-            [waiter.util.date-utils :as du])
+  (:require [clj-time.core :as t])
   (:import (com.codahale.metrics Timer)
            (java.util.concurrent TimeUnit)
            (org.joda.time DateTime)))
