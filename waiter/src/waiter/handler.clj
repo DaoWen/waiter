@@ -519,7 +519,7 @@
             scheme (some-> request utils/request->scheme name)
             make-url (fn make-url [path]
                        (str (when scheme (str scheme "://")) host "/state/" path))]
-        (-> {:details (->> ["fallback" "interstitial" "instance-launch-metrics" "kv-store" "leader"
+        (-> {:details (->> ["fallback" "interstitial" "launch-metrics" "kv-store" "leader"
                             "local-usage" "maintainer" "router-metrics" "scheduler" "statsd"]
                            (pc/map-from-keys make-url))
              :router-id router-id

@@ -730,14 +730,14 @@
                           :scheduling-instance-timer-contexts scheduling-instance-timer-contexts'
                           :starting-instance-context-maps starting-instance-context-maps')))))))
 
-(defn start-instance-launch-stats-maintainer
+(defn start-instance-launch-metrics-maintainer
   "go block to collect metrics on the instance launch overhead of waiter services.
 
   Updated state for the router is read from `router-state-chan`."
   [router-state-chan service-id->service-description-fn]
   (let [exit-chan (async/chan 1)
         query-chan (au/latest-chan)
-        update-state-timer (metrics/waiter-timer "state" "instance-launch-stats-maintainer" "update-state")
+        update-state-timer (metrics/waiter-timer "state" "instance-launch-metrics-maintainer" "update-state")
         waiter-timer (metrics/waiter-timer "service-launch-overhead" "schedule-time")]
     (async/go
       (try
@@ -750,7 +750,7 @@
                   ([message]
                    (if (= :exit message)
                      (do
-                       (log/warn "stopping instance-launch-stats-maintainer")
+                       (log/warn "stopping instance-launch-metrics-maintainer")
                        (comment "Return nil to exit the loop"))
                      current-state))
 
@@ -778,6 +778,6 @@
             (when new-state
               (recur new-state))))
         (catch Exception e
-          (log/error e "Error in instance-launch-stats-maintainer. Instance launch metrics will not be collected."))))
+          (log/error e "Error in instance-launch-metrics-maintainer. Instance launch metrics will not be collected."))))
     {:exit-chan exit-chan
      :query-chan query-chan}))
