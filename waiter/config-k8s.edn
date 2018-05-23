@@ -1,8 +1,7 @@
 {
  ; ---------- Cluster ----------
 
- :zookeeper {
-             ;; Use an in-process ZK (not for production use):
+ :zookeeper {;; Use an in-process ZK (not for production use):
              :connect-string :in-process}
 
  ; ---------- Network ----------
