@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Usage: run-using-shell-scheduler.sh [PORT]
+# Usage: run-using-k8s-scheduler.sh [PORT]
 #
 # Examples:
-#   run-using-shell-scheduler.sh 9091
-#   run-using-shell-scheduler.sh
+#   run-using-k8s-scheduler.sh 9091
+#   run-using-k8s-scheduler.sh
 #
-# Runs Waiter, configured to use the local "shell scheduler" (not for production use).
+# Runs Waiter, configured to use the Kubernetes scheduler.
 
 export WAITER_PORT=${1:-9091}
 
