@@ -1178,10 +1178,14 @@
    :state-instance-launch-handler-fn (pc/fnk [[:daemons instance-launch-stats-maintainer]
                                               [:state router-id]
                                               wrap-secure-request-fn]
-                                       (let [query-chan (:query-chan instance-launch-stats-maintainer)]
+                                       (let [query-chan (:query-chan instance-launch-stats-maintainer)
+                                             xform (fn [m] (->>
+                                                             #(dissoc % :service-timer)
+                                                             (partial mapv)
+                                                             (update-in m [:service-instance-launch-trackers])))]
                                          (wrap-secure-request-fn
                                            (fn state-instance-launch-handler-fn [request]
-                                             (handler/get-query-chan-state-handler router-id query-chan request)))))
+                                             (handler/get-query-chan-state-handler router-id query-chan request xform)))))
    :state-kv-store-handler-fn (pc/fnk [[:curator kv-store]
                                        [:state router-id]
                                        wrap-secure-request-fn]

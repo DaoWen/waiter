@@ -543,19 +543,23 @@
 
 (defn get-query-chan-state-handler
   "Outputs the state by sending a standard query to the channel."
-  [router-id query-chan request]
-  (async/go
-    (try
-      (let [timeout-chan (-> 30 t/seconds t/in-millis async/timeout)
-            response-chan (async/promise-chan)]
-        (async/>! query-chan {:cid (cid/get-correlation-id) :response-chan response-chan})
-        (log/info (str "Waiting for response from query channel"))
-        (let [[data _] (async/alts! [response-chan timeout-chan] :priority true)
-              state (or data {:message "Request timeout"})]
-          (-> {:router-id router-id :state state}
-              (utils/map->streaming-json-response))))
-      (catch Exception ex
-        (utils/exception->response ex request)))))
+  ([router-id query-chan request]
+   (get-query-chan-state-handler router-id query-chan request identity))
+  ([router-id query-chan request xform]
+   (async/go
+     (try
+       (let [timeout-chan (-> 30 t/seconds t/in-millis async/timeout)
+             response-chan (async/promise-chan)]
+         (async/>! query-chan {:cid (cid/get-correlation-id) :response-chan response-chan})
+         (log/info (str "Waiting for response from query channel"))
+         (let [[data _] (async/alts! [response-chan timeout-chan] :priority true)
+               state (if data
+                       (xform data)
+                       {:message "Request timeout"})]
+           (-> {:router-id router-id :state state}
+               (utils/map->streaming-json-response))))
+       (catch Exception ex
+         (utils/exception->response ex request))))))
 
 (defn- get-function-state
   "Outputs the state obtained by invoking `retrieve-state-fn`."
