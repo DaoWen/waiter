@@ -661,9 +661,8 @@
                       (tc/->TimerContext waiter-timer start-time)]}))
 
 (defn- make-service-instance-launch-tracker
-  [service-id service-id->service-description-fn]
-  (let [now (t/now)
-        service-timer (metrics/service-timer service-id "service-launch-overhead" "schedule-time")
+  [service-id now service-id->service-description-fn]
+  (let [service-timer (metrics/service-timer service-id "service-launch-overhead" "schedule-time")
         ;; TODO remove this min-instances
         {:strs [min-instances]} (service-id->service-description-fn service-id)
         ctxs (make-scheduling-instance-timer-contexts min-instances service-timer now)]
@@ -677,9 +676,9 @@
   "Track metrics on app instances, specifically schedule and startup times."
   [service-instance-launch-trackers new-service-ids removed-service-ids service-id->healthy-instances
    service-id->unhealthy-instances service-id->service-description-fn waiter-timer]
-  (let [new-trackers (map #(make-service-instance-launch-tracker % service-id->service-description-fn)
-                          new-service-ids)
-        now (t/now)]
+  (let [now (t/now)
+        new-trackers (map #(make-service-instance-launch-tracker % now service-id->service-description-fn)
+                          new-service-ids)]
     (->> service-instance-launch-trackers
          ;; Remove trackers from deleted services
          (remove (comp removed-service-ids :service-id))
