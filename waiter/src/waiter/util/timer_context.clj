@@ -11,8 +11,7 @@
 (ns waiter.util.timer-context
   (:require [clj-time.core :as t])
   (:import (com.codahale.metrics Timer)
-           (java.util.concurrent TimeUnit)
-           (org.joda.time DateTime)))
+           (java.util.concurrent TimeUnit)))
 
 (defrecord TimerContext [timer start-time])
 
