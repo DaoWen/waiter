@@ -462,10 +462,11 @@
         (loop [service-id->health-check-context' {}
                healthy-service-ids #{}
                scheduler-messages []
-               [[service-id {:keys [active-instances failed-instances]}] & remaining] (seq (pc/map-keys :id service->service-instances))]
+               [[{service-id :id :as service} {:keys [active-instances failed-instances]}] & remaining] (seq service->service-instances)]
           (if service-id
             (let [request-instances-time (t/now)
                   active-instance-ids (->> active-instances (map :id) set)
+                  {:keys [instances task-count]} service
                   {:keys [instance-id->unhealthy-instance instance-id->tracked-failed-instance instance-id->failed-health-check-count]}
                   (get service-id->health-check-context service-id)
                   {:keys [healthy-instances unhealthy-instances] :as service-instance-info}
@@ -489,9 +490,10 @@
                                         (conj scheduler-messages
                                               [:update-service-instances
                                                (assoc service-instance-info
-                                                 :service-id service-id
-                                                 :failed-instances all-failed-instances
-                                                 :scheduler-sync-time request-instances-time)])
+                                                      :failed-instances all-failed-instances
+                                                      :instance-counts {:requested instances :started task-count}
+                                                      :scheduler-sync-time request-instances-time
+                                                      :service-id service-id)])
                                         scheduler-messages)
                   instance-id->unhealthy-instance' (->> unhealthy-instances
                                                         (map (fn [{:keys [id] :as instance}]
@@ -648,45 +650,45 @@
 
 ;; Support for tracking service instance launching time stats
 
-(defn- make-scheduling-instance-timer-contexts
-  [instance-count service-timer start-time]
+(def instance-counts-zero {:requested 0 :started 0})
+
+(defn- make-scheduling-instance-timer-context-maps
+  [service-timer waiter-timer start-time instance-count]
   (repeatedly instance-count
-              #(tc/->TimerContext service-timer start-time)))
+              #(-> {:service (tc/->TimerContext service-timer start-time)
+                    :global (tc/->TimerContext waiter-timer start-time)})))
 
 (defn- make-starting-instance-context-maps
-  [service-timer waiter-timer start-time new-instances]
+  [service-timer start-time new-instances]
   (for [{:keys [id]} new-instances]
     {:instance-id id
-     :timer-contexts [(tc/->TimerContext service-timer start-time)
-                      (tc/->TimerContext waiter-timer start-time)]}))
+     :timer-context (tc/->TimerContext service-timer start-time)}))
 
-(defn- make-service-instance-launch-tracker
-  [service-id now service-id->service-description-fn]
-  (let [service-timer (metrics/service-timer service-id "service-launch-overhead" "schedule-time")
-        ;; TODO remove this min-instances
-        {:strs [min-instances]} (service-id->service-description-fn service-id)
-        ctxs (make-scheduling-instance-timer-contexts min-instances service-timer now)]
-    {:known-instance-ids #{}
-     :scheduling-instance-timer-contexts (vec ctxs)
-     :service-id service-id
-     :service-timer service-timer
-     :starting-instance-context-maps []}))
+(defn- make-launch-tracker
+  [service-id]
+  {:instance-counts instance-counts-zero
+   :known-instance-ids #{}
+   :scheduling-instance-timer-context-maps []
+   :service-id service-id
+   :service-schedule-timer (metrics/service-timer service-id "launch-overhead" "schedule-time")
+   :service-startup-timer (metrics/service-timer service-id "launch-overhead" "startup-time")
+   :starting-instance-context-maps []})
 
-(defn update-instance-launch-trackers
+(defn update-launch-trackers
   "Track metrics on app instances, specifically schedule and startup times."
-  [service-instance-launch-trackers new-service-ids removed-service-ids service-id->healthy-instances
-   service-id->unhealthy-instances service-id->service-description-fn waiter-timer]
+  [launch-trackers new-service-ids removed-service-ids service-id->healthy-instances
+   service-id->unhealthy-instances service-id->instance-counts waiter-timer]
   (let [now (t/now)
-        new-trackers (map #(make-service-instance-launch-tracker % now service-id->service-description-fn)
-                          new-service-ids)]
-    (->> service-instance-launch-trackers
+        new-trackers (map make-launch-tracker new-service-ids)]
+    (->> launch-trackers
          ;; Remove trackers from deleted services
          (remove (comp removed-service-ids :service-id))
          ;; Add trackers for newly-discovered services
          (concat new-trackers)
          ;; Update all trackers...
-         (mapv (fn [{:keys [known-instance-ids scheduling-instance-timer-contexts
-                            service-id service-timer starting-instance-context-maps] :as tracker-state}]
+         (mapv (fn [{:keys [known-instance-ids instance-counts scheduling-instance-timer-context-maps
+                            service-id service-schedule-timer service-startup-timer
+                            starting-instance-context-maps] :as tracker-state}]
                  (let [healthy-instances (get service-id->healthy-instances service-id)
                        known-instances' (->> service-id
                                              (get service-id->unhealthy-instances)
@@ -698,59 +700,67 @@
                        healthy-instance-id? (->> healthy-instances (map :id) set)
                        known-instance-ids' (->> known-instances' (map :id) set)
                        removed-instance-id? (complement known-instance-ids')
+                       ;; react to upward-scaling
+                       instance-counts' (get service-id->instance-counts service-id instance-counts-zero)
+                       instances-requested-delta (- (:requested instance-counts')
+                                                    (:requested instance-counts))
+                       scheduling-instance-timer-context-maps'
+                       (->> instances-requested-delta 
+                            (make-scheduling-instance-timer-context-maps service-schedule-timer waiter-timer now)
+                            (into scheduling-instance-timer-context-maps))
                        ;; Process timers for starting instances
                        starting-instance-context-maps'
-                       (->>
-                         new-instances
-                         (make-starting-instance-context-maps service-timer waiter-timer now)
-                         (concat starting-instance-context-maps)
-                         (filterv (fn [{:keys [instance-id timer-contexts]}]
-                                    (cond
-                                      ;; Stop tracking any instances that disappeared.
-                                      (removed-instance-id? instance-id) false
-                                      ;; Report startup time for any tracked instances that are now healthy.
-                                      (healthy-instance-id? instance-id)
-                                      (doseq [timer-ctx timer-contexts]
-                                        (tc/report-duration timer-ctx now))
-                                      ;; Continue tracking all other instances.
-                                      :else true))))
+                       (->> new-instances
+                            (make-starting-instance-context-maps service-startup-timer now)
+                            (concat starting-instance-context-maps)
+                            (filterv (fn [{:keys [instance-id timer-context]}]
+                                       (cond
+                                         ;; Stop tracking any instances that disappeared.
+                                         (removed-instance-id? instance-id) false
+                                         ;; Report startup time for any tracked instances that are now healthy.
+                                         (healthy-instance-id? instance-id)
+                                         (tc/report-duration timer-context now)
+                                         ;; Continue tracking all other instances.
+                                         :else true))))
                        ;; Process timers for instances that finished scheduling
                        unmatched-instance-count (- (count new-instances)
-                                                   (count scheduling-instance-timer-contexts))
-                       [matched-timer-contexts scheduling-instance-timer-contexts']
-                       (split-at (count new-instances) scheduling-instance-timer-contexts)]
+                                                   (count scheduling-instance-timer-context-maps'))
+                       [matched-timer-context-maps scheduling-instance-timer-context-maps'']
+                       (split-at (count new-instances) scheduling-instance-timer-context-maps')]
                    (when (pos? unmatched-instance-count)
                      (log/warn "Untracked scheduled instances discovered in instance launch metric loop"
                                unmatched-instance-count))
-                   (doseq [timer-ctx matched-timer-contexts]
-                     (tc/report-duration timer-ctx now))
+                   (doseq [timer-context-map matched-timer-context-maps
+                           [_ timer-context] timer-context-map]
+                     (tc/report-duration timer-context now))
                    ;; tracker-state'
                    (assoc tracker-state
+                          :instance-counts instance-counts'
                           :known-instance-ids known-instance-ids'
-                          :scheduling-instance-timer-contexts scheduling-instance-timer-contexts'
+                          :scheduling-instance-timer-context-maps (vec scheduling-instance-timer-context-maps'')
                           :starting-instance-context-maps starting-instance-context-maps')))))))
 
-(defn start-instance-launch-metrics-maintainer
+(defn start-launch-metrics-maintainer
   "go block to collect metrics on the instance launch overhead of waiter services.
 
   Updated state for the router is read from `router-state-chan`."
-  [router-state-chan service-id->service-description-fn]
+  [router-state-chan]
   (let [exit-chan (async/chan 1)
         query-chan (au/latest-chan)
-        update-state-timer (metrics/waiter-timer "state" "instance-launch-metrics-maintainer" "update-state")
-        waiter-timer (metrics/waiter-timer "service-launch-overhead" "schedule-time")]
+        update-state-timer (metrics/waiter-timer "state" "launch-metrics-maintainer" "update-state")
+        waiter-timer (metrics/waiter-timer "launch-overhead" "schedule-time")]
     (async/go
       (try
-        (loop [{:keys [known-service-ids service-instance-launch-trackers] :as current-state}
+        (loop [{:keys [known-service-ids launch-trackers] :as current-state}
                {:known-service-ids #{}
-                :service-instance-launch-trackers nil}]
+                :launch-trackers nil}]
           (let [new-state
                 (async/alt!
                   exit-chan
                   ([message]
                    (if (= :exit message)
                      (do
-                       (log/warn "stopping instance-launch-metrics-maintainer")
+                       (log/warn "stopping launch-metrics-maintainer")
                        (comment "Return nil to exit the loop"))
                      current-state))
 
@@ -758,26 +768,27 @@
                   ([router-state]
                    (timers/start-stop-time!
                      update-state-timer
-                     (let [{:keys [service-id->healthy-instances service-id->my-instance->slots service-id->unhealthy-instances]} router-state
+                     (let [{:keys [service-id->healthy-instances service-id->instance-counts service-id->instance-slots
+                                   service-id->my-instance->slots service-id->unhealthy-instances]} router-state
                            incoming-service-ids (set (keys service-id->my-instance->slots))
                            new-service-ids (set/difference incoming-service-ids known-service-ids)
                            removed-service-ids (set/difference known-service-ids incoming-service-ids)
-                           service-instance-launch-trackers' (update-instance-launch-trackers
-                                                               service-instance-launch-trackers new-service-ids removed-service-ids
-                                                               service-id->healthy-instances service-id->unhealthy-instances
-                                                               service-id->service-description-fn waiter-timer)]
+                           launch-trackers' (update-launch-trackers
+                                              launch-trackers new-service-ids removed-service-ids
+                                              service-id->healthy-instances service-id->unhealthy-instances
+                                              service-id->instance-counts waiter-timer)]
                        {:known-service-ids incoming-service-ids
-                        :service-instance-launch-trackers service-instance-launch-trackers'})))
+                        :launch-trackers launch-trackers'})))
 
                   query-chan
                   ([{:keys [cid response-chan]}]
-                   (cid/cinfo cid (str "returning current instance-launch state " current-state))
+                   (cid/cinfo cid (str "returning current launch state " current-state))
                    (async/put! response-chan current-state)
                    current-state)
                   :priority true)]
             (when new-state
               (recur new-state))))
         (catch Exception e
-          (log/error e "Error in instance-launch-metrics-maintainer. Instance launch metrics will not be collected."))))
+          (log/error e "Error in launch-metrics-maintainer. Instance launch metrics will not be collected."))))
     {:exit-chan exit-chan
      :query-chan query-chan}))

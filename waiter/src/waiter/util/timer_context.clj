@@ -16,7 +16,7 @@
 (defrecord TimerContext [timer start-time])
 
 (defn report-duration
-  "Report elapsed duration on the given timer metric."
+  "Report elapsed duration on the given timer metric. Returns nil."
   [{:keys [timer start-time]} end-time]
   (.update ^Timer timer
            (t/in-millis (t/interval start-time end-time))

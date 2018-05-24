@@ -867,12 +867,6 @@
                                      (metrics/transient-metrics-gc scheduler-state-chan local-usage-agent service-gc-go-routine metrics-config)]
                                  (metrics/transient-metrics-data-producer service-id->metrics-chan service-id->metrics-fn metrics-config)
                                  metrics-gc-chans))
-   :instance-launch-metrics-maintainer (pc/fnk [[:routines service-id->service-description-fn]
-                                                router-state-maintainer]
-                                         (-> router-state-maintainer
-                                             (get-in [:maintainer-chans :router-state-push-mult])
-                                             (async/tap (au/latest-chan))
-                                             (scheduler/start-instance-launch-metrics-maintainer service-id->service-description-fn)))
    :interstitial-maintainer (pc/fnk [[:routines service-id->service-description-fn]
                                      [:state interstitial-state-atom]
                                      scheduler-maintainer]
@@ -881,6 +875,11 @@
                                     initial-state {}]
                                 (interstitial/interstitial-maintainer
                                   service-id->service-description-fn scheduler-state-chan interstitial-state-atom initial-state)))
+   :launch-metrics-maintainer (pc/fnk [router-state-maintainer]
+                                (-> router-state-maintainer
+                                    (get-in [:maintainer-chans :router-state-push-mult])
+                                    (async/tap (au/latest-chan))
+                                    (scheduler/start-launch-metrics-maintainer)))
    :messages (pc/fnk [[:settings {messages nil}]]
                (when messages
                  (utils/load-messages messages)))
@@ -1175,14 +1174,12 @@
                                       (wrap-secure-request-fn
                                         (fn state-interstitial-handler-fn [request]
                                           (handler/get-query-chan-state-handler router-id interstitial-query-chan request)))))
-   :state-launch-metrics-handler-fn (pc/fnk [[:daemons instance-launch-metrics-maintainer]
+   :state-launch-metrics-handler-fn (pc/fnk [[:daemons launch-metrics-maintainer]
                                              [:state router-id]
                                              wrap-secure-request-fn]
-                                      (let [query-chan (:query-chan instance-launch-metrics-maintainer)
-                                            xform (fn [m] (->>
-                                                            #(dissoc % :service-timer)
-                                                            (partial mapv)
-                                                            (update-in m [:service-instance-launch-trackers])))]
+                                      (let [query-chan (:query-chan launch-metrics-maintainer)
+                                            xform (fn [m] (update-in m [:launch-trackers]
+                                                                     (partial mapv #(dissoc % :service-schedule-timer :service-startup-timer))))]
                                         (wrap-secure-request-fn
                                           (fn state-launch-metrics-handler-fn [request]
                                             (handler/get-query-chan-state-handler router-id query-chan request xform)))))
