@@ -82,9 +82,9 @@
     (scheduler/make-Service
       {:k8s-name (get-in replicaset [:metadata :name])
        :id (get-in replicaset [:metadata :annotations :waiter/service-id])
-       :instances started
+       :instances requested
        :namespace (get-in replicaset [:metadata :namespace])
-       :task-count requested
+       :task-count started
        :task-stats {:healthy available
                     :running ready
                     :staged (- requested ready)
