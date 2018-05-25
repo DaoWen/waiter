@@ -90,6 +90,7 @@
                   :exclusions [org.clojure/tools.reader]]
                  [ring-basic-authentication "1.0.5"]
                  [slingshot "0.12.2"]
+                 [swiss-arrows "1.0.0"]
                  [try-let "1.1.0"]]
 
   :resource-paths ["resources"]
