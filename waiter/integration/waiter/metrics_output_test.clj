@@ -145,3 +145,63 @@
         (is (>= (get-in aggregate-metrics ["counters" "request-counts" "total"]) num-requests)))
 
       (delete-service waiter-url service-id))))
+
+
+(defmacro get-p-value
+  [metric p]
+  `(let [p# ~p
+         p-value# (get-in ~metric ["value" p#])]
+     (is (number? p-value#) (str "missing p" p# " value"))
+     p-value#))
+
+(deftest ^:parallel ^:integration-slow test-launch-metrics-output
+  (testing-using-waiter-url
+    (let [waiter-settings (waiter-settings waiter-url)
+          metrics-sync-interval-ms (get-in waiter-settings [:metrics-config :metrics-sync-interval-ms])
+          router->endpoint (routers waiter-url)
+          router-urls (vals router->endpoint)
+          service-name (rand-name)
+          sleep-seconds 20
+          min-startup-seconds 10 ; 20s +/- 10s for 2 polls with 5s granularity
+          max-startup-seconds 60 ; the service shouldn't take more than a minute to become healthy
+          instance-count 2
+          req-headers {:x-waiter-cmd (str "sleep " sleep-seconds " && " (kitchen-cmd "-p $PORT0"))
+                       :x-waiter-cmd-type "shell"
+                       :x-waiter-min-instances instance-count
+                       :x-waiter-name service-name}
+          {:keys [headers request-headers service-id] :as first-response}
+          (make-request-with-debug-info req-headers #(make-kitchen-request waiter-url % :method :get))]
+      (with-service-cleanup
+        service-id
+        ; ensure the first request succeded before continuing with testing
+        (assert-response-status first-response 200)
+
+        ; ensure each router has had a chance to publish its local metrics
+        (Thread/sleep 10000)
+
+        ; check that the launch-metrics on each router are present and have sane values
+        (doseq [[router-id router-url] router->endpoint]
+          (let [metrics-response (->> "/metrics"
+                                      (make-request router-url)
+                                      :body
+                                      json/read-str)
+                service-launch-metric-timers (get-in metrics-response ["services" service-id "timers" "launch-overhead"])
+                service-scheduling-timer (get service-launch-metric-timers "schedule-time" ::missing-service-sched)
+                service-startup-timer (get service-launch-metric-timers "startup-time" ::missing-service-start)
+                waiter-scheduling-timer (get-in metrics-response ["waiter" "launch-overhead" "timers" "schedule-time"] ::missing-waiter-sched)]
+            (testing "all launch metrics present"
+              (is (every? some? [service-scheduling-timer service-startup-timer waiter-scheduling-timer])))
+            (testing "expected launch-metric instance counts"
+              (is (== instance-count
+                      (get service-scheduling-timer "count")))
+              (is (<= instance-count
+                      (get waiter-scheduling-timer "count"))))
+            (testing "reasonable values for current service's launch metrics"
+              (is (<= min-startup-seconds
+                      (get-p-value service-startup-timer "1.0")
+                      max-startup-seconds)))
+            (testing "reasonable values for global launch metrics"
+              (is (<= (get-p-value service-scheduling-timer "0.0")
+                      (get-p-value waiter-scheduling-timer "0.0")))
+              (is (<= (get-p-value service-scheduling-timer "1.0")
+                      (get-p-value waiter-scheduling-timer "1.0"))))))))))
