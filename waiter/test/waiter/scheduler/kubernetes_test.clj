@@ -49,6 +49,15 @@
         :else x))
     walkable-collection))
 
+(defmacro assert-data-equal
+  [expected actual]
+  `(let [expected# ~expected
+         actual# ~actual]
+     (when-not (= expected# actual#)
+       (clojure.pprint/pprint
+         (clojure.data/diff expected# actual#)))
+     (is (= expected# actual#))))
+
 (deftest test-scheduler-get-instances
   (let [test-cases [{:name "get-instances no response"
                      :kubernetes-response nil
@@ -244,6 +253,78 @@
           (is (= expected-response actual-response) (str name))
           (scheduler/preserve-only-killed-instances-for-services! []))))))
 
+(deftest test-scheduler-get-apps
+  (let [test-cases
+        [{:api-server-response
+          {:kind "ReplicaSetList"
+           :apiVersion "extensions/v1beta1"
+           :items []}
+          :expected-result []}
+
+         {:api-server-response
+          {:kind "ReplicaSetList"
+           :apiVersion "extensions/v1beta1"
+           :items [{:metadata {:name "test-app-1234"
+                               :namespace "myself"
+                               :labels {:app "test-app-1234"
+                                        :managed-by "waiter"}
+                               :annotations {:waiter/app-status "live"
+                                             :waiter/service-id "test-app-1234"}}
+                    :spec {:replicas 2
+                           :selector {:matchLabels {:app "test-app-1234"
+                                                    :managed-by "waiter"}}}
+                    :status {:replicas 2
+                             :readyReplicas 2
+                             :availableReplicas 2}}
+                   {:metadata {:name "test-app-6789"
+                               :namespace "myself"
+                               :labels {:app "test-app-6789"
+                                        :managed-by "waiter"}
+                               :annotations {:waiter/app-status "live"
+                                             :waiter/service-id "test-app-6789"}}
+                    :spec {:replicas 3
+                           :selector {:matchLabels {:app "test-app-6789"
+                                                    :managed-by "waiter"}}}
+                    :status {:replicas 3
+                             :readyReplicas 1
+                             :availableReplicas 2
+                             :unavailableReplicas 1}}]}
+          :expected-result
+          [(scheduler/make-Service {:id "test-app-1234"
+                                    :instances 2
+                                    :task-count 2
+                                    :task-stats {:running 2, :healthy 2, :unhealthy 0, :staged 0}})
+           (scheduler/make-Service {:id "test-app-6789" :instances 3 :task-count 3
+                                    :task-stats {:running 3 :healthy 1 :unhealthy 2 :staged 0}})]}
+
+         {:api-server-response
+          {:kind "ReplicaSetList"
+           :apiVersion "extensions/v1beta1"
+           :items [{:metadata {:name "test-app-9999"
+                               :namespace "myself"
+                               :labels {:app "test-app-9999"
+                                        :managed-by "waiter"}
+                               :annotations {:waiter/app-status "killed"
+                                             :waiter/service-id "test-app-9999"}}
+                    :spec {:replicas 0
+                           :selector {:matchLabels {:app "test-app-9999"
+                                                    :managed-by "waiter"}}}
+                    :status {:replicas 0
+                             :readyReplicas 0
+                             :availableReplicas 0}}]}
+          :expected-result
+          [(scheduler/make-Service {:id "test-app-9999"
+                                    :instances 0
+                                    :task-count 0
+                                    :task-stats {:running 0, :healthy 0, :unhealthy 0, :staged 0}})]}]]
+    (doseq [{:keys [api-server-response expected-result]} test-cases]
+      (let [dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
+            actual-result (with-redefs [api-request (constantly api-server-response)]
+                            (->> dummy-scheduler
+                                 scheduler/get-apps
+                                 sanitize-k8s-service-records))]
+        (assert-data-equal expected-result actual-result)))))
+
 (deftest test-scheduler-get-apps->instances
   (let [services-response
         {:kind "ReplicaSetList"
@@ -423,10 +504,7 @@
                  (->> dummy-scheduler
                       scheduler/get-apps->instances
                       sanitize-k8s-service-records))]
-    (when-not (= expected actual)
-      (clojure.pprint/pprint
-        (clojure.data/diff expected actual)))
-    (is (= expected actual))
+    (assert-data-equal expected actual)
     (scheduler/preserve-only-killed-instances-for-services! [])))
 
 (comment "Disabled tests"
