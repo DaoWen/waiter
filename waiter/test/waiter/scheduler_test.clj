@@ -550,7 +550,7 @@
        (let [{service-id# :service-id
               actual-known-instance-ids# :known-instance-ids
               actual-scheduling-instance-timer-context-maps# :scheduling-instance-timer-context-maps
-              actual-starting-instance-context-maps# :starting-instance-context-maps} tracker#
+              actual-starting-instance-ids# :starting-instance-ids} tracker#
              {expected-service-id# :service-id
               expected-known-instance-ids# :known-instance-ids
               expected-scheduling-instance-count# :scheduling-instance-count
@@ -563,13 +563,16 @@
          (doseq [actual-scheduled# actual-scheduling-instance-timer-context-maps#]
            (is (= 2 (count actual-scheduled#))))
          (is (= (sort expected-starting-instance-ids#)
-                (->> actual-starting-instance-context-maps# (map :instance-id) sort)))))))
+                (sort actual-starting-instance-ids#)))))))
+
+(def base-start-time (t/minus (t/now) (t/minutes 1)))
 
 (defn- make-service-instance
   [service-number instance-number]
-  {:id (str "inst-" service-number \. instance-number)
-   :service-id (str "service-" service-number)
-   :started-at (+ service-number instance-number)})
+  (let [offset-seconds (t/seconds (+ service-number instance-number))]
+    {:id (str "inst-" service-number \. instance-number)
+     :service-id (str "service-" service-number)
+     :started-at (t/plus base-start-time offset-seconds)}))
 
 (deftest test-update-launch-trackers
   (let [empty-trackers []
