@@ -1179,7 +1179,10 @@
                                              wrap-secure-request-fn]
                                       (let [query-chan (:query-chan launch-metrics-maintainer)
                                             xform (fn [m] (update-in m [:launch-trackers]
-                                                                     (partial mapv #(dissoc % :service-schedule-timer :service-startup-timer))))]
+                                                                     (fn [trackers]
+                                                                       (->> trackers
+                                                                            (map #(dissoc % :service-schedule-timer :service-startup-timer))
+                                                                            (pc/map-from-vals :service-id)))))]
                                         (wrap-secure-request-fn
                                           (fn state-launch-metrics-handler-fn [request]
                                             (handler/get-query-chan-state-handler router-id query-chan request xform)))))

@@ -147,12 +147,22 @@
       (delete-service waiter-url service-id))))
 
 
-(defmacro get-p-value
+(defmacro get-percentile-value
   [metric p]
   `(let [p# ~p
          p-value# (get-in ~metric ["value" p#])]
      (is (number? p-value#) (str "missing p" p# " value"))
      p-value#))
+
+(defn- one-started-instance-observed?
+  "Returns true if the launch-metrics state reflects a single started instance
+   in the instance counts for the given service on the given router."
+  [router-url service-id]
+  (-> (make-request router-url "/state/launch-metrics")
+      :body
+      json/read-str
+      (get-in ["state" "launch-trackers" service-id "instance-counts" "started"])
+      (= 1)))
 
 (deftest ^:parallel ^:integration-slow test-launch-metrics-output
   (testing-using-waiter-url
@@ -175,20 +185,18 @@
         service-id
         ; ensure the first request succeded before continuing with testing
         (assert-response-status first-response 200)
-
-        ; ensure each router has had a chance to publish its local metrics
-        (Thread/sleep 10000)
-
         ; check that the launch-metrics on each router are present and have sane values
         (doseq [[router-id router-url] router->endpoint]
+          (wait-for #(one-started-instance-observed? router-url service-id)
+                    :interval 1 :timeout 10)
           (let [metrics-response (->> "/metrics"
                                       (make-request router-url)
                                       :body
                                       json/read-str)
                 service-launch-metric-timers (get-in metrics-response ["services" service-id "timers" "launch-overhead"])
-                service-scheduling-timer (get service-launch-metric-timers "schedule-time" ::missing-service-sched)
-                service-startup-timer (get service-launch-metric-timers "startup-time" ::missing-service-start)
-                waiter-scheduling-timer (get-in metrics-response ["waiter" "launch-overhead" "timers" "schedule-time"] ::missing-waiter-sched)]
+                service-scheduling-timer (get service-launch-metric-timers "schedule-time")
+                service-startup-timer (get service-launch-metric-timers "startup-time")
+                waiter-scheduling-timer (get-in metrics-response ["waiter" "launch-overhead" "timers" "schedule-time"])]
             (testing "all launch metrics present"
               (is (every? some? [service-scheduling-timer service-startup-timer waiter-scheduling-timer])))
             (testing "expected launch-metric instance counts"
@@ -198,10 +206,10 @@
                       (get waiter-scheduling-timer "count"))))
             (testing "reasonable values for current service's launch metrics"
               (is (<= min-startup-seconds
-                      (get-p-value service-startup-timer "1.0")
+                      (get-percentile-value service-startup-timer "1.0")
                       max-startup-seconds)))
             (testing "reasonable values for global launch metrics"
-              (is (<= (get-p-value service-scheduling-timer "0.0")
-                      (get-p-value waiter-scheduling-timer "0.0")))
-              (is (<= (get-p-value service-scheduling-timer "1.0")
-                      (get-p-value waiter-scheduling-timer "1.0"))))))))))
+              (is (<= (get-percentile-value service-scheduling-timer "0.0")
+                      (get-percentile-value waiter-scheduling-timer "0.0")))
+              (is (<= (get-percentile-value service-scheduling-timer "1.0")
+                      (get-percentile-value waiter-scheduling-timer "1.0"))))))))))
