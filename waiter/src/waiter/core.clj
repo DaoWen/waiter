@@ -1177,15 +1177,10 @@
    :state-launch-metrics-handler-fn (pc/fnk [[:daemons launch-metrics-maintainer]
                                              [:state router-id]
                                              wrap-secure-request-fn]
-                                      (let [query-chan (:query-chan launch-metrics-maintainer)
-                                            xform (fn [m] (update-in m [:launch-trackers]
-                                                                     (fn [trackers]
-                                                                       (->> trackers
-                                                                            (map #(dissoc % :service-schedule-timer :service-startup-timer))
-                                                                            (pc/map-from-vals :service-id)))))]
+                                      (let [query-chan (:query-chan launch-metrics-maintainer)]
                                         (wrap-secure-request-fn
                                           (fn state-launch-metrics-handler-fn [request]
-                                            (handler/get-query-chan-state-handler router-id query-chan request xform)))))
+                                            (handler/get-query-chan-state-handler router-id query-chan request)))))
    :state-kv-store-handler-fn (pc/fnk [[:curator kv-store]
                                        [:state router-id]
                                        wrap-secure-request-fn]

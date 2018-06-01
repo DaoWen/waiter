@@ -544,7 +544,7 @@
 (defmacro check-trackers
   [all-trackers assertion-maps]
   `(let [assertion-maps# ~assertion-maps
-         all-trackers# ~all-trackers]
+         all-trackers# (vals ~all-trackers)]
      (is (= (count all-trackers#) (count assertion-maps#)))
      (doseq [tracker# all-trackers#]
        (let [{service-id# :service-id
@@ -575,7 +575,7 @@
      :started-at (t/plus base-start-time offset-seconds)}))
 
 (deftest test-update-launch-trackers
-  (let [empty-trackers []
+  (let [empty-trackers {}
         empty-new-service-ids #{}
         empty-removed-service-ids #{}
         empty-service-id->healthy-instances {}

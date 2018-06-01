@@ -161,7 +161,7 @@
   (-> (make-request router-url "/state/launch-metrics")
       :body
       json/read-str
-      (get-in ["state" "launch-trackers" service-id "instance-counts" "started"])
+      (get-in ["state" "service-id->launch-tracker" service-id "instance-counts" "started"])
       (= 1)))
 
 (deftest ^:parallel ^:integration-slow test-launch-metrics-output
