@@ -29,6 +29,7 @@
             [waiter.util.async-utils :as au]
             [waiter.util.utils :as utils])
   (:import (com.codahale.metrics Counter Gauge Histogram Meter MetricFilter MetricRegistry Timer Timer$Context)
+           (java.util.concurrent TimeUnit)
            (org.joda.time DateTime)))
 
 (defn compress-strings
@@ -478,3 +479,10 @@
    :stream-read-body (service-timer service-id "stream-read-body")
    :stream-request-rate (service-meter service-id "stream-request-rate")
    :throughput-meter (service-meter service-id "stream-throughput")})
+
+(defn report-duration
+  "Report elapsed duration on the given timer metric. Returns nil."
+  [timer start-time end-time]
+  (.update ^Timer timer
+           (t/in-millis (t/interval start-time end-time))
+           TimeUnit/MILLISECONDS))

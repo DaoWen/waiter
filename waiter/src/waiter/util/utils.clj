@@ -25,8 +25,7 @@
             [digest]
             [taoensso.nippy :as nippy]
             [taoensso.nippy.compression :as compression]
-            [waiter.util.date-utils :as du]
-            [waiter.util.timer-context])
+            [waiter.util.date-utils :as du])
   (:import clojure.core.async.impl.channels.ManyToManyChannel
            clojure.lang.ExceptionInfo
            clojure.lang.PersistentQueue
@@ -39,8 +38,7 @@
            java.util.regex.Pattern
            javax.servlet.ServletResponse
            (org.joda.time DateTime)
-           (schema.utils ValidationError)
-           (waiter.util.timer_context TimerContext)))
+           (schema.utils ValidationError)))
 
 (defn select-keys-pred
   "Returns a map with only the keys, k, for which (pred k) is true."

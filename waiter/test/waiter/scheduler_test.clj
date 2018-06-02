@@ -549,7 +549,7 @@
      (doseq [tracker# all-trackers#]
        (let [{service-id# :service-id
               actual-known-instance-ids# :known-instance-ids
-              actual-scheduling-instance-timer-context-maps# :scheduling-instance-timer-context-maps
+              actual-instance-scheduling-start-times# :instance-scheduling-start-times
               actual-starting-instance-ids# :starting-instance-ids} tracker#
              {expected-service-id# :service-id
               expected-known-instance-ids# :known-instance-ids
@@ -559,9 +559,7 @@
                    expected-scheduling-instance-count# 0
                    expected-starting-instance-ids# []} :as assertion-map#} (get assertion-maps# service-id#)]
          (is (= expected-known-instance-ids# actual-known-instance-ids#))
-         (is (= expected-scheduling-instance-count# (count actual-scheduling-instance-timer-context-maps#)))
-         (doseq [actual-scheduled# actual-scheduling-instance-timer-context-maps#]
-           (is (= 2 (count actual-scheduled#))))
+         (is (= expected-scheduling-instance-count# (count actual-instance-scheduling-start-times#)))
          (is (= (sort expected-starting-instance-ids#)
                 (sort actual-starting-instance-ids#)))))))
 
