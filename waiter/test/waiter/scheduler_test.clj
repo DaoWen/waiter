@@ -544,15 +544,14 @@
 (defmacro check-trackers
   [all-trackers assertion-maps]
   `(let [assertion-maps# ~assertion-maps
-         all-trackers# (vals ~all-trackers)]
+         all-trackers# ~all-trackers]
      (is (= (count all-trackers#) (count assertion-maps#)))
-     (doseq [tracker# all-trackers#]
-       (let [{service-id# :service-id
-              actual-known-instance-ids# :known-instance-ids
-              actual-instance-scheduling-start-times# :instance-scheduling-start-times
-              actual-starting-instance-ids# :starting-instance-ids} tracker#
-             {expected-service-id# :service-id
-              expected-known-instance-ids# :known-instance-ids
+     (doseq [tracker-entry# all-trackers#]
+       (let [[service-id#
+              {actual-known-instance-ids# :known-instance-ids
+               actual-instance-scheduling-start-times# :instance-scheduling-start-times
+               actual-starting-instance-ids# :starting-instance-ids}] tracker-entry#
+             {expected-known-instance-ids# :known-instance-ids
               expected-scheduling-instance-count# :scheduling-instance-count
               expected-starting-instance-ids# :starting-instance-ids
               :or {expected-known-instance-ids# #{}

@@ -651,33 +651,33 @@
 
 (def instance-counts-zero {:requested 0 :started 0})
 
-(defn- make-launch-tracker
+(defn- make-launch-tracker-entry
   [service-id]
-  {:instance-counts instance-counts-zero
-   :known-instance-ids #{}
-   :instance-scheduling-start-times []
-   :service-id service-id
-   :service-schedule-timer (metrics/service-timer service-id "launch-overhead" "schedule-time")
-   :service-startup-timer (metrics/service-timer service-id "launch-overhead" "startup-time")
-   :starting-instance-ids []})
+  [service-id
+   {:instance-counts instance-counts-zero
+    :known-instance-ids #{}
+    :instance-scheduling-start-times []
+    :service-schedule-timer (metrics/service-timer service-id "launch-overhead" "schedule-time")
+    :service-startup-timer (metrics/service-timer service-id "launch-overhead" "startup-time")
+    :starting-instance-ids []}])
 
 (defn update-launch-trackers
   "Track metrics on app instances, specifically schedule and startup times."
   [service-id->launch-tracker new-service-ids removed-service-ids service-id->healthy-instances
    service-id->unhealthy-instances service-id->instance-counts waiter-schedule-timer]
   (let [now (t/now)
-        new-trackers (map make-launch-tracker new-service-ids)
-        trackers' (->> service-id->launch-tracker
-                       ;; Remove trackers from deleted services
-                       (remove (comp removed-service-ids key))
-                       (map val)
-                       ;; Add trackers for newly-discovered services
-                       (concat new-trackers))]
+        new-tracker-entries (map make-launch-tracker-entry new-service-ids)
+        tracker-entries' (->> service-id->launch-tracker
+                              ;; Remove trackers from deleted services
+                              (remove (comp removed-service-ids key))
+                              ;; Add trackers for newly-discovered services
+                              (concat new-tracker-entries))]
     ;; Update all trackers...
-    (pc/for-map [{:keys [known-instance-ids instance-counts instance-scheduling-start-times
-                         service-id service-schedule-timer service-startup-timer starting-instance-ids]
-                  :as tracker-state}
-                 trackers']
+    (pc/for-map [[service-id
+                  {:keys [known-instance-ids instance-counts instance-scheduling-start-times
+                          service-schedule-timer service-startup-timer starting-instance-ids]
+                   :as tracker-state}]
+                 tracker-entries']
       service-id
       (let [healthy-instances (get service-id->healthy-instances service-id)
             known-instances' (->> service-id
