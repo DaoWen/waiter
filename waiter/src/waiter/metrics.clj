@@ -480,9 +480,22 @@
    :stream-request-rate (service-meter service-id "stream-request-rate")
    :throughput-meter (service-meter service-id "stream-throughput")})
 
+(defn duration-between
+  "Returns the duration (interval) elapsed between the start and end times.
+   Negative durations are reported as zero-length intervals."
+  [start-time end-time]
+  (t/interval
+    start-time
+    (if (t/before? start-time end-time)
+      end-time
+      start-time)))
+
 (defn report-duration
-  "Report elapsed duration on the given timer metric. Returns nil."
-  [timer start-time end-time]
-  (.update ^Timer timer
-           (t/in-millis (t/interval start-time end-time))
-           TimeUnit/MILLISECONDS))
+  "Report elapsed duration on the given timer metric.
+   Returns nil. Granularity is in milliseconds."
+  ([^Timer timer start-time end-time]
+   (report-duration timer (duration-between start-time end-time)))
+  ([^Timer timer duration]
+   (.update timer
+            (t/in-millis duration)
+            TimeUnit/MILLISECONDS)))

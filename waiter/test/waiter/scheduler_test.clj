@@ -25,6 +25,7 @@
             [waiter.curator :as curator]
             [waiter.metrics :as metrics]
             [waiter.scheduler :refer :all]
+            [waiter.util.client-tools :as ct]
             [waiter.util.date-utils :as du])
   (:import (java.net ConnectException SocketTimeoutException)
            (java.util.concurrent TimeoutException)))
@@ -703,3 +704,77 @@
                       empty-service-id->instance-counts waiter-timer)]
     (testing "update-launch-trackers: transition back to empty"
       (is (= empty-trackers trackers-10)))))
+
+(deftest test-start-launch-metrics-maintainer
+  (testing "start-launch-metrics-maintainer"
+    (let [make-metric-maintainer
+          (fn make-metric-maintainer
+            [state-0]
+            (let [state-query-chan (async/chan 1)
+                  state-updates-chan (async/chan 1)
+                  maintainer (start-launch-metrics-maintainer state-query-chan state-updates-chan)]
+              (-> (async/<!! state-query-chan) (async/>!! state-0))
+              (assoc maintainer :update-chan state-updates-chan)))
+          update-metric-maintainer-state
+          (fn update-metric-maintainer-state
+            [maintainer state']
+            (async/>!! (:update-chan maintainer) state'))
+          query-metric-maintainer-state
+          (fn query-metric-maintainer-state
+            [maintainer]
+            (let [response-chan (async/chan 1)]
+              (async/>!! (:query-chan maintainer)
+                         {:cid (ct/current-test-name) :response-chan response-chan})
+              (async/<!! response-chan)))]
+      (let [empty-router-state {:iteration 0
+                                :service-id->healthy-instances {}
+                                :service-id->instance-counts {}
+                                :service-id->my-instance->slots {}
+                                :service-id->unhealthy-instances {}}
+            maintainer (make-metric-maintainer empty-router-state)
+            actual-state (query-metric-maintainer-state maintainer)
+            expected-state {:known-service-ids #{}
+                            :previous-iteration 0
+                            :service-id->launch-tracker {}}]
+        (testing "empty initial router state"
+          (is (= expected-state actual-state))))
+      (let [service-id "service1"
+            instance-counts {:requested 3 :running 2}
+            initial-router-state {:iteration 7
+                                  :service-id->healthy-instances {service-id [{:id "inst1"}]}
+                                  :service-id->instance-counts {service-id instance-counts}
+                                  :service-id->my-instance->slots {service-id {}}
+                                  :service-id->unhealthy-instances {service-id [{:id "inst2"}]}}
+            maintainer (make-metric-maintainer initial-router-state)
+            actual-state-1 (query-metric-maintainer-state maintainer)
+            actual-state-1' (do (update-metric-maintainer-state maintainer {:iteration 3})
+                                (query-metric-maintainer-state maintainer))
+            expected-state-1 {:known-service-ids #{service-id}
+                              :previous-iteration 7
+                              :service-id->launch-tracker {service-id {:instance-counts instance-counts
+                                                                       :instance-scheduling-start-times []
+                                                                       :known-instance-ids #{"inst1" "inst2"}
+                                                                       :starting-instance-ids []}}}
+
+            instance-counts' {:requested 6 :running 3}
+            updated-router-state {:iteration 9
+                                  :service-id->healthy-instances {service-id [{:id "inst1"} {:id "inst2"}]}
+                                  :service-id->instance-counts {service-id instance-counts'}
+                                  :service-id->my-instance->slots {service-id {}}
+                                  :service-id->unhealthy-instances {service-id [{:id "inst3"}]}}
+            actual-state-2 (do (update-metric-maintainer-state maintainer updated-router-state)
+                               (-> maintainer
+                                   (query-metric-maintainer-state)
+                                   (update-in [:service-id->launch-tracker service-id :instance-scheduling-start-times] count)))
+            expected-state-2 {:known-service-ids #{service-id}
+                              :previous-iteration 9
+                              :service-id->launch-tracker {service-id {:instance-counts instance-counts'
+                                                                       :instance-scheduling-start-times 2
+                                                                       :known-instance-ids #{"inst1" "inst2" "inst3"}
+                                                                       :starting-instance-ids ["inst3"]}}}]
+        (testing "non-empty initial router state"
+          (is (= expected-state-1 actual-state-1)))
+        (testing "ignored router state update"
+          (is (= expected-state-1 actual-state-1')))
+        (testing "applied router state update"
+          (is (= expected-state-2 actual-state-2)))))))

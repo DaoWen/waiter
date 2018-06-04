@@ -146,23 +146,24 @@
 
       (delete-service waiter-url service-id))))
 
-
 (defmacro get-percentile-value
+  "Look up percentile from metric, also asserting that it's present.
+   The percentile argument should be a string (e.g., \"1.0\" or \"0.95\")."
   [metric p]
   `(let [p# ~p
          p-value# (get-in ~metric ["value" p#])]
      (is (number? p-value#) (str "missing p" p# " value"))
      p-value#))
 
-(defn- one-started-instance-observed?
-  "Returns true if the launch-metrics state reflects a single started instance
-   in the instance counts for the given service on the given router."
-  [router-url service-id]
+(defn- n-running-instances-observed?
+  "Returns true if the launch-metrics state reflects at least $n$ running
+   instances in the instance counts for the given service on the given router."
+  [router-url service-id n]
   (-> (make-request router-url "/state/launch-metrics")
       :body
       json/read-str
-      (get-in ["state" "service-id->launch-tracker" service-id "instance-counts" "started"])
-      (= 1)))
+      (get-in ["state" "service-id->launch-tracker" service-id "instance-counts" "running"] 0)
+      (>= n)))
 
 (deftest ^:parallel ^:integration-slow test-launch-metrics-output
   (testing-using-waiter-url
@@ -187,29 +188,29 @@
         (assert-response-status first-response 200)
         ; check that the launch-metrics on each router are present and have sane values
         (doseq [[router-id router-url] router->endpoint]
-          (wait-for #(one-started-instance-observed? router-url service-id)
-                    :interval 1 :timeout 10)
+          (wait-for #(n-running-instances-observed? router-url service-id instance-count)
+                    :interval 1 :timeout min-startup-seconds)
           (let [metrics-response (->> "/metrics"
                                       (make-request router-url)
                                       :body
                                       json/read-str)
-                service-launch-metric-timers (get-in metrics-response ["services" service-id "timers" "launch-overhead"])
-                service-scheduling-timer (get service-launch-metric-timers "schedule-time")
-                service-startup-timer (get service-launch-metric-timers "startup-time")
-                waiter-scheduling-timer (get-in metrics-response ["waiter" "launch-overhead" "timers" "schedule-time"])]
+                service-launch-metrics (get-in metrics-response ["services" service-id "timers" "launch-overhead"])
+                service-scheduling-metric (get service-launch-metrics "schedule-time")
+                service-startup-metric (get service-launch-metrics "startup-time")
+                waiter-scheduling-metric (get-in metrics-response ["waiter" "launch-overhead" "timers" "schedule-time"])]
             (testing "all launch metrics present"
-              (is (every? some? [service-scheduling-timer service-startup-timer waiter-scheduling-timer])))
+              (is (every? some? [service-scheduling-metric service-startup-metric waiter-scheduling-metric])))
             (testing "expected launch-metric instance counts"
               (is (== instance-count
-                      (get service-scheduling-timer "count")))
+                      (get service-scheduling-metric "count")))
               (is (<= instance-count
-                      (get waiter-scheduling-timer "count"))))
+                      (get waiter-scheduling-metric "count"))))
             (testing "reasonable values for current service's launch metrics"
               (is (<= min-startup-seconds
-                      (get-percentile-value service-startup-timer "1.0")
+                      (get-percentile-value service-startup-metric "1.0")
                       max-startup-seconds)))
             (testing "reasonable values for global launch metrics"
-              (is (<= (get-percentile-value service-scheduling-timer "0.0")
-                      (get-percentile-value waiter-scheduling-timer "0.0")))
-              (is (<= (get-percentile-value service-scheduling-timer "1.0")
-                      (get-percentile-value waiter-scheduling-timer "1.0"))))))))))
+              (is (<= (get-percentile-value service-scheduling-metric "0.0")
+                      (get-percentile-value waiter-scheduling-metric "0.0")))
+              (is (<= (get-percentile-value service-scheduling-metric "1.0")
+                      (get-percentile-value waiter-scheduling-metric "1.0"))))))))))
