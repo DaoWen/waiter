@@ -82,7 +82,7 @@
        :id service-id
        :instances requested
        :namespace namespace
-       :task-count replicas
+       :task-count running
        :task-stats {:healthy readyReplicas
                     :running running
                     :staged (- replicas running)
