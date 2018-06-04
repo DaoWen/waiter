@@ -223,7 +223,7 @@
                          (:namespace service)
                          "/replicasets/"
                          (:k8s-name service))
-        instances (:task-count service)]
+        instances (:instances service)]
     (patch-object-replicas http-client request-url instances instances')))
 
 (defn- scale-service-by
@@ -233,12 +233,12 @@
                          (:namespace service)
                          "/replicasets/"
                          (:k8s-name service))
-        instances (:task-count service)
+        instances (:instances service)
         instances' (+ instances instances-delta)]
     (patch-object-replicas http-client request-url instances instances')))
 
 (defn- kill-service-instance
-  [api-server-url http-client {:keys [id namespace pod-name service-id] :as instance} service]
+  [{:keys [api-server-url http-client]} {:keys [id namespace pod-name service-id] :as instance} service]
   (let [pod-url (str api-server-url
                      "/api/v1/namespaces/"
                      namespace
@@ -317,7 +317,7 @@
     (replicaset->Service response-json)))
 
 (defn- delete-service
-  [api-server-url http-client service]
+  [{:keys [api-server-url http-client] :as scheduler} service]
   (when-not service
     (ss/throw+ {:status 404, :message "Service not found"}))
   (let [replicaset-url (str api-server-url
@@ -329,25 +329,25 @@
     (patch-object-json replicaset-url http-client
                        [{:op :replace, :path "/metadata/annotations/waiter~1app-status", :value "killed"}
                         {:op :replace, :path "/spec/replicas", :value 0}])
-    (doseq [pod (get-replicaset-pods api-server-url http-client service)
+    (doseq [pod (get-replicaset-pods scheduler service)
             :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
       (api-request http-client pod-url :request-method :delete))
     (api-request http-client replicaset-url :request-method :delete)
     {:message (str "K8s deleted ReplicaSet " (:k8s-name service))
      :result :deleted}))
 
-(defn- service-id->service
+(defn service-id->service
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
-  (let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)
-        replicasets (->> (str api-server-url
-                              "/apis/extensions/v1beta1/namespaces/"
-                              service-ns
-                              "/replicasets?labelSelector=managed-by=waiter,app="
-                              (service-id->k8s-name scheduler service-id))
-                         (api-request http-client)
-                         :items)]
-    (when (seq replicasets)
-      (-> replicasets first replicaset->Service))))
+  (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
+    (let [replicasets (->> (str api-server-url
+                                "/apis/extensions/v1beta1/namespaces/"
+                                service-ns
+                                "/replicasets?labelSelector=managed-by=waiter,app="
+                                (service-id->k8s-name scheduler service-id))
+                           (api-request http-client)
+                           :items)]
+      (when (seq replicasets)
+        (-> replicasets first replicaset->Service)))))
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
@@ -375,18 +375,24 @@
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
       (let [service (service-id->service this service-id)
-            kill-result (kill-service-instance api-server-url http-client instance service)]
+            kill-result (kill-service-instance this instance service)]
         {:instance-id id
          :killed? true
-         :message "Killed"
+         :message "Successfully killed instance"
          :service-id service-id
          :status (:status kill-result)})
       (catch [:status 404] e
         {:instance-id id
          :killed? false
-         :message (str id " not killed (instance not found)")
+         :message "Not found"
          :service-id service-id
-         :status 404})))
+         :status 404})
+      (catch Throwable e
+        {:instance-id id
+         :killed? false
+         :message (.getMessage e)
+         :service-id service-id
+         :status 500})))
 
   (app-exists? [this service-id]
     (ss/try+
@@ -408,7 +414,7 @@
   (delete-app [this service-id]
     (ss/try+
       (let [service (service-id->service this service-id)
-            delete-result (delete-service api-server-url http-client service)]
+            delete-result (delete-service this service)]
         (comment ;; TODO - remove cached info about this service (once I start caching stuff)
                  (when delete-result
                    (remove-failed-instances-for-service! service-id->failed-instances-transient-store service-id)

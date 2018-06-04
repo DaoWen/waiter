@@ -507,6 +507,79 @@
     (assert-data-equal expected actual)
     (scheduler/preserve-only-killed-instances-for-services! [])))
 
+(deftest test-process-kill-instance-request
+  (let [service-id "test-service-id"
+        service (scheduler/make-Service {:id service-id :instances 1})
+        instance-id "instance-id"
+        instance (scheduler/make-ServiceInstance
+                   {:extra-ports []
+                    :healthy? true
+                    :host "10.141.141.10"
+                    :id instance-id
+                    :log-directory "/home/myself"
+                    :port 8080
+                    :protocol "https"
+                    :service-id service-id
+                    :started-at (du/str-to-date "2014-09-13T00:24:56Z" k8s-timestamp-format)})
+        dummy-scheduler (make-dummy-scheduler [service-id])
+        partial-expected {:instance-id instance-id :killed? false :service-id service-id}]
+    (with-redefs [service-id->service (constantly service)]
+      (testing "successful-delete"
+        (let [actual (with-redefs [api-request (constantly {:status 200})]
+                       (-> dummy-scheduler
+                           (scheduler/kill-instance instance)
+                           sanitize-k8s-service-records))]
+          (is (= (assoc partial-expected
+                        :killed? true
+                        :message "Successfully killed instance"
+                        :status 200)
+                 actual))))
+      (testing "unsuccessful-delete"
+        (let [error-msg "Unable to kill instance"
+              actual (with-redefs [api-request (fn [& _] (throw (RuntimeException. error-msg)))]
+                       (-> dummy-scheduler
+                           (scheduler/kill-instance instance)
+                           sanitize-k8s-service-records))]
+          (is (= (assoc partial-expected
+                        :message error-msg
+                        :status 500)
+                 actual)))) )))
+
+(deftest test-scheduler-app-exists?
+  (let [service-id "test-app-1234"
+        empty-response
+        {:kind "ReplicaSetList"
+         :apiVersion "extensions/v1beta1"
+         :items []}
+        non-empty-response
+        {:kind "ReplicaSetList"
+         :apiVersion "extensions/v1beta1"
+         :items [{:metadata {:name service-id
+                             :namespace "myself"
+                             :labels {:app service-id
+                                      :managed-by "waiter"}
+                             :annotations {:waiter/app-status "live"
+                                           :waiter/service-id service-id}}
+                  :spec {:replicas 2
+                         :selector {:matchLabels {:app service-id
+                                                  :managed-by "waiter"}}}
+                  :status {:replicas 2
+                           :readyReplicas 2
+                           :availableReplicas 2}}]}
+        test-cases [{:api-server-response nil
+                     :expected-result false}
+                    {:api-server-response {}
+                     :expected-result false}
+                    {:api-server-response empty-response
+                     :expected-result false}
+                    {:api-server-response non-empty-response
+                     :expected-result true}]]
+    (doseq [{:keys [api-server-response expected-result]} test-cases]
+      (let [dummy-scheduler (make-dummy-scheduler [service-id])
+            actual-result (with-redefs [api-request (constantly api-server-response)]
+                            (scheduler/app-exists? dummy-scheduler service-id))]
+        (is (= expected-result actual-result))))))
+
 (comment "Disabled tests"
 
 (deftest test-service-id->failed-instances-transient-store
