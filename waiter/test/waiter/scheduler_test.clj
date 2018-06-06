@@ -18,7 +18,7 @@
             [clojure.core.async :as async]
             [clojure.string :as str]
             [clojure.test :refer :all]
-            [clojure.walk]
+            [clojure.walk :as walk]
             [plumbing.core :as pc]
             [qbits.jet.client.http :as http]
             [slingshot.slingshot :as ss]
@@ -730,7 +730,7 @@
                          {:cid (ct/current-test-name) :response-chan response-chan})
               (->> (async/<!! response-chan)
                    ;; replace unpredictable state timestamps in with `:time`
-                   (clojure.walk/postwalk
+                   (walk/postwalk
                      (fn [x] (if (instance? DateTime x) :time x))))))]
       (let [empty-router-state {:iteration 0
                                 :service-id->healthy-instances {}

@@ -691,7 +691,7 @@
                                   (sort instance-comparator)
                                   (mapv :id))
             known-instance-ids' (->> known-instances' (map :id) set)
-            removed-instance-ids (remove known-instance-ids known-instance-ids')
+            removed-instance-ids (set/difference known-instance-ids known-instance-ids')
             ;; React to upward-scaling
             instance-counts' (get service-id->instance-counts service-id instance-counts-zero)
             instances-requested-delta (- (:requested instance-counts')
@@ -726,8 +726,7 @@
         (doseq [start-time matched-start-times]
           (let [duration (metrics/duration-between start-time current-time)]
             (metrics/report-duration waiter-schedule-timer duration)
-            (metrics/report-duration service-schedule-timer duration)
-            #_(statsd/timer! service-schedule-timer duration)))
+            (metrics/report-duration service-schedule-timer duration)))
         ;; Report startup time for instances that are now healthy
         (doseq [instance-id started-instance-ids]
           (let [start-time (starting-instance-id->start-timestamp' instance-id)]
@@ -739,7 +738,9 @@
                :known-instance-ids known-instance-ids'
                :starting-instance-id->start-timestamp starting-instance-id->start-timestamp'')))))
 
-(defmacro build-intital-service-launch-trackers
+(defmacro build-inital-service-launch-trackers
+  "Build the initially-observed state for the launch-metrics-maintainer's state loop,
+   querying the initial services data from the router-state-maintainer."
   [router-state-query-chan]
   `(let [response-chan# (async/chan 1)
          _# (async/>! ~router-state-query-chan response-chan#)
@@ -781,7 +782,7 @@
                ;; as <= the iteration of states later read from router-state-updates-chan.
                ;; This is because the router-state-maintainer puts! to the channels asynchronously.
                ;; The if-not < iteration check below to addresses this problem.
-               (build-intital-service-launch-trackers router-state-query-chan)]
+               (build-inital-service-launch-trackers router-state-query-chan)]
           (let [new-state
                 (async/alt!
                   exit-chan
