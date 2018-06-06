@@ -686,15 +686,15 @@
       service-id
       (let [healthy-instances (get service-id->healthy-instances service-id)
             healthy-instance-id? (->> healthy-instances (map :id) set)
-            known-instances (->> service-id
-                                 (get service-id->unhealthy-instances)
-                                 (concat healthy-instances))
+            known-instances' (->> service-id
+                                  (get service-id->unhealthy-instances)
+                                  (concat healthy-instances))
             previously-known-instance? (comp known-instance-ids :id)
-            new-instance-ids (->> known-instances
+            new-instance-ids (->> known-instances'
                                   (remove previously-known-instance?)
                                   (sort instance-comparator)
                                   (mapv :id))
-            known-instance-ids' (->> known-instances (map :id) set)
+            known-instance-ids' (->> known-instances' (map :id) set)
             removed-instance-ids (remove known-instance-ids known-instance-ids')
             ;; React to upward-scaling
             instance-counts' (get service-id->instance-counts service-id instance-counts-zero)
