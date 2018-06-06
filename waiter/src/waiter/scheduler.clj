@@ -738,7 +738,7 @@
                :known-instance-ids known-instance-ids'
                :starting-instance-id->start-timestamp starting-instance-id->start-timestamp'')))))
 
-(defmacro build-inital-service-launch-trackers
+(defmacro build-initial-service-launch-trackers
   "Build the initially-observed state for the launch-metrics-maintainer's state loop,
    querying the initial services data from the router-state-maintainer."
   [router-state-query-chan]
@@ -782,7 +782,7 @@
                ;; as <= the iteration of states later read from router-state-updates-chan.
                ;; This is because the router-state-maintainer puts! to the channels asynchronously.
                ;; The if-not < iteration check below to addresses this problem.
-               (build-inital-service-launch-trackers router-state-query-chan)]
+               (build-initial-service-launch-trackers router-state-query-chan)]
           (let [new-state
                 (async/alt!
                   exit-chan
