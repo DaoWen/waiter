@@ -713,10 +713,9 @@
     (let [make-metric-maintainer
           (fn make-metric-maintainer
             [state-0]
-            (let [state-query-chan (async/chan 1)
-                  state-updates-chan (async/chan 1)
-                  maintainer (start-launch-metrics-maintainer state-query-chan state-updates-chan)]
-              (-> (async/<!! state-query-chan) (async/>!! state-0))
+            (let [state-updates-chan (async/chan 1)
+                  maintainer (start-launch-metrics-maintainer state-updates-chan)]
+              (-> (async/>!! state-updates-chan state-0))
               (assoc maintainer :update-chan state-updates-chan)))
           update-metric-maintainer-state
           (fn update-metric-maintainer-state
@@ -735,7 +734,6 @@
       (let [empty-router-state {:iteration 0
                                 :service-id->healthy-instances {}
                                 :service-id->instance-counts {}
-                                :service-id->my-instance->slots {}
                                 :service-id->unhealthy-instances {}}
             maintainer (make-metric-maintainer empty-router-state)
             actual-state (query-metric-maintainer-state maintainer)
@@ -749,7 +747,6 @@
             initial-router-state {:iteration 7
                                   :service-id->healthy-instances {service-id [{:id "inst1"}]}
                                   :service-id->instance-counts {service-id instance-counts}
-                                  :service-id->my-instance->slots {service-id {}}
                                   :service-id->unhealthy-instances {service-id [{:id "inst2"}]}}
             maintainer (make-metric-maintainer initial-router-state)
             actual-state-1 (query-metric-maintainer-state maintainer)
@@ -767,7 +764,6 @@
             updated-router-state {:iteration 9
                                   :service-id->healthy-instances {service-id [{:id "inst1"} {:id "inst2"}]}
                                   :service-id->instance-counts {service-id instance-counts'}
-                                  :service-id->my-instance->slots {service-id {}}
                                   :service-id->unhealthy-instances {service-id [{:id "inst3"}]}}
             actual-state-2 (do (update-metric-maintainer-state maintainer updated-router-state)
                                (query-metric-maintainer-state maintainer))

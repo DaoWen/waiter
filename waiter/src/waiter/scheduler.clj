@@ -738,39 +738,35 @@
                :known-instance-ids known-instance-ids'
                :starting-instance-id->start-timestamp starting-instance-id->start-timestamp'')))))
 
-(defmacro build-initial-service-launch-trackers
-  "Build the initially-observed state for the launch-metrics-maintainer's state loop,
-   querying the initial services data from the router-state-maintainer."
-  [router-state-query-chan]
-  `(let [response-chan# (async/chan 1)
-         _# (async/>! ~router-state-query-chan response-chan#)
-         initial-router-state# (async/<! response-chan#)
-         iteration# (:iteration initial-router-state#)
-         initial-service-ids# (-> initial-router-state# :service-id->instance-counts keys set)
-         initial-service-id->launch-tracker#
-         (pc/for-map [service-id# initial-service-ids#]
-           service-id#
-           (let [instance-counts# (-> initial-router-state#
-                                      :service-id->instance-counts
-                                      (get service-id#))
-                 known-instance-ids# (->> initial-router-state#
-                                          ((juxt :service-id->healthy-instances
-                                                 :service-id->unhealthy-instances))
-                                          (map #(map :id (get % service-id#)))
-                                          (reduce into #{}))]
-             (make-launch-tracker service-id# instance-counts# known-instance-ids#)))]
-     (log/info "Starting launch metrics loop on iteration" iteration#
-               "with services:" initial-service-ids#)
-     {:known-service-ids initial-service-ids#
-      :previous-iteration iteration#
-      :service-id->launch-tracker initial-service-id->launch-tracker#}))
+(defn build-initial-service-launch-trackers
+  "Build the initially-observed state for the launch-metrics-maintainer's state loop
+   from the first state observed on the router-state-updates channel."
+  [{:keys [iteration service-id->healthy-instances service-id->instance-counts
+           service-id->unhealthy-instances] :as initial-router-state}]
+  (let [initial-service-ids (-> service-id->instance-counts keys set)
+        initial-service-id->launch-tracker
+        (pc/for-map [service-id initial-service-ids]
+          service-id
+          (let [instance-counts (get service-id->instance-counts service-id)
+                known-instance-ids
+                (set (for [service-id->instances [service-id->healthy-instances
+                                                  service-id->unhealthy-instances]
+                           instance (get service-id->instances service-id)]
+                       (:id instance)))]
+            (make-launch-tracker service-id instance-counts known-instance-ids)))]
+    (log/info "Starting launch metrics loop on iteration" iteration
+              "with services:" initial-service-ids)
+    {:known-service-ids initial-service-ids
+     :previous-iteration iteration
+     :service-id->launch-tracker initial-service-id->launch-tracker}))
+
+(def no-previous-iteration-value -1)
 
 (defn start-launch-metrics-maintainer
   "go block to collect metrics on the instance launch overhead of waiter services.
 
-  Initial state for the router is read from `router-state-query-chan`.
   Updates to state for the router are then read from `router-state-updates-chan`."
-  [router-state-query-chan router-state-updates-chan]
+  [router-state-updates-chan]
   (let [exit-chan (async/chan 1)
         query-chan (au/latest-chan)
         update-state-timer (metrics/waiter-timer "state" "launch-metrics-maintainer" "update-state")
@@ -782,7 +778,9 @@
                ;; as <= the iteration of states later read from router-state-updates-chan.
                ;; This is because the router-state-maintainer puts! to the channels asynchronously.
                ;; The if-not < iteration check below to addresses this problem.
-               (build-initial-service-launch-trackers router-state-query-chan)]
+               {:known-service-ids #{}
+                :previous-iteration no-previous-iteration-value
+                :service-id->launch-tracker nil}]
           (let [new-state
                 (async/alt!
                   exit-chan
@@ -795,8 +793,11 @@
 
                   router-state-updates-chan
                   ([router-state]
-                   (if-not (< previous-iteration (:iteration router-state))
-                     current-state  ;; ignoring out-of-order state updates
+                   (cond
+                     (nil? service-id->launch-tracker)
+                     (build-initial-service-launch-trackers router-state)
+
+                     (< previous-iteration (:iteration router-state))
                      (timers/start-stop-time!
                        update-state-timer
                        (let [{:keys [iteration service-id->healthy-instances
@@ -810,7 +811,10 @@
                                                            service-id->instance-counts waiter-schedule-timer)]
                          {:known-service-ids incoming-service-ids
                           :previous-iteration iteration
-                          :service-id->launch-tracker service-id->launch-tracker'}))))
+                          :service-id->launch-tracker service-id->launch-tracker'}))
+
+                     :else  ;; ignoring out-of-order state updates
+                     current-state))
 
                   query-chan
                   ([{:keys [cid response-chan]}]
