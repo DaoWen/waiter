@@ -688,7 +688,7 @@
             previously-known-instance? (comp known-instance-ids :id)
             new-instance-ids (->> known-instances
                                   (remove previously-known-instance?)
-                                  (sort-by :started-at)
+                                  (sort instance-comparator)
                                   (mapv :id))
             known-instance-ids' (->> known-instances (map :id) set)
             removed-instance-ids (remove known-instance-ids known-instance-ids')
@@ -745,7 +745,7 @@
          _# (async/>! ~router-state-query-chan response-chan#)
          initial-router-state# (async/<! response-chan#)
          iteration# (:iteration initial-router-state#)
-         initial-service-ids# (-> initial-router-state# :service-id->my-instance->slots keys set)
+         initial-service-ids# (-> initial-router-state# :service-id->instance-counts keys set)
          initial-service-id->launch-tracker#
          (pc/for-map [service-id# initial-service-ids#]
            service-id#
@@ -798,10 +798,9 @@
                      current-state  ;; ignoring out-of-order state updates
                      (timers/start-stop-time!
                        update-state-timer
-                       (let [{:keys [iteration service-id->healthy-instances service-id->instance-counts
-                                     service-id->instance-slots service-id->my-instance->slots
-                                     service-id->unhealthy-instances]} router-state
-                             incoming-service-ids (set (keys service-id->my-instance->slots))
+                       (let [{:keys [iteration service-id->healthy-instances
+                                     service-id->instance-counts service-id->unhealthy-instances]} router-state
+                             incoming-service-ids (set (keys service-id->instance-counts))
                              new-service-ids (set/difference incoming-service-ids known-service-ids)
                              removed-service-ids (set/difference known-service-ids incoming-service-ids)
                              service-id->launch-tracker' (update-launch-trackers

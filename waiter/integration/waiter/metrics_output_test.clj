@@ -176,7 +176,8 @@
           min-startup-seconds 10 ; 20s +/- 10s for 2 polls with 5s granularity
           max-startup-seconds 60 ; the service shouldn't take more than a minute to become healthy
           instance-count 2
-          req-headers {:x-waiter-cmd (str "sleep " sleep-seconds " && " (kitchen-cmd "-p $PORT0"))
+          req-headers {:x-waiter-cmd (kitchen-cmd (str "-p $PORT0 --start-up-sleep-ms "
+                                                       (* 1000 sleep-seconds)))
                        :x-waiter-cmd-type "shell"
                        :x-waiter-min-instances instance-count
                        :x-waiter-name service-name}
