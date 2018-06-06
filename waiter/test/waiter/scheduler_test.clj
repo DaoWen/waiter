@@ -748,7 +748,7 @@
         (testing "empty initial router state"
           (is (= expected-state actual-state))))
       (let [service-id "service1"
-            instance-counts {:requested 3 :running 2}
+            instance-counts {:requested 3 :scheduled 2}
             initial-router-state {:iteration 7
                                   :service-id->healthy-instances {service-id [{:id "inst1"}]}
                                   :service-id->instance-counts {service-id instance-counts}
@@ -767,7 +767,7 @@
                                            :metric-group "default"
                                            :starting-instance-id->start-timestamp {}}}}
 
-            instance-counts' {:requested 6 :running 3}
+            instance-counts' {:requested 6 :scheduled 3}
             updated-router-state {:iteration 9
                                   :service-id->healthy-instances {service-id [{:id "inst1"} {:id "inst2"}]}
                                   :service-id->instance-counts {service-id instance-counts'}

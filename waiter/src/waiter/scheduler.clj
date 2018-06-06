@@ -491,7 +491,7 @@
                                               [:update-service-instances
                                                (assoc service-instance-info
                                                       :failed-instances all-failed-instances
-                                                      :instance-counts {:requested instances :running task-count}
+                                                      :instance-counts {:requested instances :scheduled task-count}
                                                       :scheduler-sync-time request-instances-time
                                                       :service-id service-id)])
                                         scheduler-messages)
@@ -650,7 +650,7 @@
 
 ;; Support for tracking service instance launching time stats
 
-(def instance-counts-zero {:requested 0 :running 0})
+(def instance-counts-zero {:requested 0 :scheduled 0})
 
 (defn- make-launch-tracker
   ([service-id service-id->service-description-fn]
