@@ -310,6 +310,13 @@
       [metric-group metric value]
       (send aggregation-agent add-value metric-group metric value gauge-metric))
 
+    (defn timing!
+      "Records a timing metric, accepting a time interval, or a start and end time"
+      ([metric-group metric start end]
+       (timing! metric-group (t/interval start end)))
+      ([metric-group metric interval]
+       (send aggregation-agent add-value metric-group metric interval gauge-metric)))
+
     (defn inc!
       "Records a counter metric"
       ([metric-group metric]
