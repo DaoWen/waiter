@@ -187,7 +187,7 @@
         service-id
         ; ensure the first request succeded before continuing with testing
         (assert-response-status first-response 200)
-        ; check that the launch-metrics on each router are present and have sane values
+        ; on each router, check that the launch-metrics are present and have sane values
         (doseq [[router-id router-url] router->endpoint]
           (wait-for #(n-running-instances-observed? router-url service-id instance-count)
                     :interval 1 :timeout min-startup-seconds)
@@ -211,7 +211,7 @@
                       (get-percentile-value service-startup-metric "1.0")
                       max-startup-seconds)))
             (testing "reasonable values for global launch metrics"
-              (is (<= (get-percentile-value service-scheduling-metric "0.0")
-                      (get-percentile-value waiter-scheduling-metric "0.0")))
+              (is (<= (get-percentile-value waiter-scheduling-metric "0.0")
+                      (get-percentile-value service-scheduling-metric "0.0")))
               (is (<= (get-percentile-value service-scheduling-metric "1.0")
                       (get-percentile-value waiter-scheduling-metric "1.0"))))))))))
