@@ -18,6 +18,7 @@
             [clojure.core.async :as async]
             [clojure.string :as str]
             [clojure.test :refer :all]
+            [clojure.walk]
             [plumbing.core :as pc]
             [qbits.jet.client.http :as http]
             [slingshot.slingshot :as ss]
@@ -28,7 +29,8 @@
             [waiter.util.client-tools :as ct]
             [waiter.util.date-utils :as du])
   (:import (java.net ConnectException SocketTimeoutException)
-           (java.util.concurrent TimeoutException)))
+           (java.util.concurrent TimeoutException)
+           (org.joda.time DateTime)))
 
 (deftest test-record-Service
   (let [test-instance-1 (->Service "service1-id" 100 100 {:running 0, :healthy 0, :unhealthy 0, :staged 0})
@@ -551,7 +553,8 @@
        (let [[service-id#
               {actual-known-instance-ids# :known-instance-ids
                actual-instance-scheduling-start-times# :instance-scheduling-start-times
-               actual-starting-instance-ids# :starting-instance-ids}] tracker-entry#
+               actual-starting-instance-id->start-timestamp# :starting-instance-id->start-timestamp}] tracker-entry#
+             actual-starting-instance-ids# (keys actual-starting-instance-id->start-timestamp#)
              {expected-known-instance-ids# :known-instance-ids
               expected-scheduling-instance-count# :scheduling-instance-count
               expected-starting-instance-ids# :starting-instance-ids
@@ -725,7 +728,10 @@
             (let [response-chan (async/chan 1)]
               (async/>!! (:query-chan maintainer)
                          {:cid (ct/current-test-name) :response-chan response-chan})
-              (async/<!! response-chan)))]
+              (->> (async/<!! response-chan)
+                   ;; replace unpredictable state timestamps in with `:time`
+                   (clojure.walk/postwalk
+                     (fn [x] (if (instance? DateTime x) :time x))))))]
       (let [empty-router-state {:iteration 0
                                 :service-id->healthy-instances {}
                                 :service-id->instance-counts {}
@@ -751,10 +757,11 @@
                                 (query-metric-maintainer-state maintainer))
             expected-state-1 {:known-service-ids #{service-id}
                               :previous-iteration 7
-                              :service-id->launch-tracker {service-id {:instance-counts instance-counts
-                                                                       :instance-scheduling-start-times []
-                                                                       :known-instance-ids #{"inst1" "inst2"}
-                                                                       :starting-instance-ids []}}}
+                              :service-id->launch-tracker
+                              {service-id {:instance-counts instance-counts
+                                           :instance-scheduling-start-times []
+                                           :known-instance-ids #{"inst1" "inst2"}
+                                           :starting-instance-id->start-timestamp {}}}}
 
             instance-counts' {:requested 6 :running 3}
             updated-router-state {:iteration 9
@@ -763,15 +770,14 @@
                                   :service-id->my-instance->slots {service-id {}}
                                   :service-id->unhealthy-instances {service-id [{:id "inst3"}]}}
             actual-state-2 (do (update-metric-maintainer-state maintainer updated-router-state)
-                               (-> maintainer
-                                   (query-metric-maintainer-state)
-                                   (update-in [:service-id->launch-tracker service-id :instance-scheduling-start-times] count)))
+                               (query-metric-maintainer-state maintainer))
             expected-state-2 {:known-service-ids #{service-id}
                               :previous-iteration 9
-                              :service-id->launch-tracker {service-id {:instance-counts instance-counts'
-                                                                       :instance-scheduling-start-times 2
-                                                                       :known-instance-ids #{"inst1" "inst2" "inst3"}
-                                                                       :starting-instance-ids ["inst3"]}}}]
+                              :service-id->launch-tracker
+                              {service-id {:instance-counts instance-counts'
+                                           :instance-scheduling-start-times [:time :time]
+                                           :known-instance-ids #{"inst1" "inst2" "inst3"}
+                                           :starting-instance-id->start-timestamp {"inst3" :time}}}}]
         (testing "non-empty initial router state"
           (is (= expected-state-1 actual-state-1)))
         (testing "ignored router state update"
