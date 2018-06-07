@@ -715,7 +715,7 @@
             [state-0]
             (let [state-updates-chan (async/chan 1)
                   maintainer (start-launch-metrics-maintainer state-updates-chan)]
-              (-> (async/>!! state-updates-chan state-0))
+              (async/>!! state-updates-chan state-0)
               (assoc maintainer :update-chan state-updates-chan)))
           update-metric-maintainer-state
           (fn update-metric-maintainer-state
