@@ -29,7 +29,7 @@
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
    (->
-     {:name-max-length 63
+     {:max-name-length 63
       :service-id->failed-instances-transient-store (atom {})
       :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
                                                             service-ids)}
@@ -534,7 +534,19 @@
                         :message "Successfully killed instance"
                         :status 200)
                  actual))))
-      (testing "unsuccessful-delete"
+      (testing "unsuccessful-delete: patch conflict"
+        (let [error-msg "Failed to update service specification due to multiple conflicts"
+              actual (with-redefs [api-request (fn mocked-api-request [_ _ & {:keys [request-method]}]
+                                                 (println "method:" request-method)
+                                                 {:status (if (= request-method :patch) 409 200)})]
+                       (-> dummy-scheduler
+                           (scheduler/kill-instance instance)
+                           sanitize-k8s-service-records))]
+          (is (= (assoc partial-expected
+                        :message error-msg
+                        :status 409)
+                 actual))))
+      (testing "unsuccessful-delete: internal error"
         (let [error-msg "Unable to kill instance"
               actual (with-redefs [api-request (fn [& _] (throw (RuntimeException. error-msg)))]
                        (-> dummy-scheduler
