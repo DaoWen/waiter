@@ -212,9 +212,9 @@
   (patch-object-json http-client k8s-object-uri
                      ;; NOTE: ~1 is JSON-patch escape syntax for a "/" in a key name
                      ;; see http://jsonpatch.com/#json-pointer
-                     [{:op :test, :path "/metadata/annotations/waiter~1app-status", :value "live"}
-                      {:op :test, :path "/spec/replicas", :value replicas}
-                      {:op :replace, :path "/spec/replicas", :value replicas'}]))
+                     [{:op :test :path "/metadata/annotations/waiter~1app-status" :value "live"}
+                      {:op :test :path "/spec/replicas" :value replicas}
+                      {:op :replace :path "/spec/replicas" :value replicas'}]))
 
 (defn- scale-service-up-to
   [api-server-url http-client service instances']
@@ -244,12 +244,12 @@
                      namespace
                      "/pods/"
                      pod-name)
-        base-body {:kind "DeleteOptions", :apiVersion "v1"}
+        base-body {:kind "DeleteOptions" :apiVersion "v1"}
         term-json (-> base-body (assoc :gracePeriodSeconds 300) (as-json))
         kill-json (-> base-body (assoc :gracePeriodSeconds 0) (as-json))
         make-kill-response (fn [killed? message status]
-                             {:instance-id id, :killed? killed?,
-                              :message message, :service-id service-id, :status status})]
+                             {:instance-id id :killed? killed?
+                              :message message :service-id service-id :status status})]
     ; request termination of the instance
     (api-request http-client pod-url :request-method :delete :body term-json)
     ; scale down the replicaset
@@ -270,13 +270,13 @@
                                           service-id->password-fn home-path)
         port0 8080 ;; TODO - get this port number from scheduler settings
         template-env (into [;; We set these two "MESOS_*" variables to improve interoperability
-                            {:name "MESOS_DIRECTORY", :value home-path}
-                            {:name "MESOS_SANDBOX", :value home-path}]
+                            {:name "MESOS_DIRECTORY" :value home-path}
+                            {:name "MESOS_SANDBOX" :value home-path}]
                            (concat
                              (for [[k v] common-env]
-                               {:name k, :value v})
+                               {:name k :value v})
                              (for [i (range ports)]
-                               {:name (str "PORT" i), :value (str (+ port0 i))})))
+                               {:name (str "PORT" i) :value (str (+ port0 i))})))
         params {:k8s-name (service-id->k8s-name scheduler service-id)
                 :backend-protocol backend-proto
                 :backend-protocol-caps (string/upper-case backend-proto)
@@ -319,7 +319,7 @@
 (defn- delete-service
   [{:keys [api-server-url http-client] :as scheduler} service]
   (when-not service
-    (ss/throw+ {:status 404, :message "Service not found"}))
+    (ss/throw+ {:status 404 :message "Service not found"}))
   (let [replicaset-url (str api-server-url
                             "/apis/extensions/v1beta1/namespaces/"
                             (:namespace service)
@@ -327,8 +327,8 @@
                             (:k8s-name service))]
     ; FIXME - catch and handle exceptions
     (patch-object-json replicaset-url http-client
-                       [{:op :replace, :path "/metadata/annotations/waiter~1app-status", :value "killed"}
-                        {:op :replace, :path "/spec/replicas", :value 0}])
+                       [{:op :replace :path "/metadata/annotations/waiter~1app-status" :value "killed"}
+                        {:op :replace :path "/spec/replicas" :value 0}])
     (doseq [pod (get-replicaset-pods scheduler service)
             :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
       (api-request http-client pod-url :request-method :delete))
@@ -387,6 +387,12 @@
          :message "Not found"
          :service-id service-id
          :status 404})
+      (catch [:status 409] e
+        {:instance-id id
+         :killed? false
+         :message (.getMessage e)
+         :service-id service-id
+         :status 409})
       (catch Throwable e
         {:instance-id id
          :killed? false
