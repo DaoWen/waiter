@@ -216,29 +216,57 @@
                       {:op :test :path "/spec/replicas" :value replicas}
                       {:op :replace :path "/spec/replicas" :value replicas'}]))
 
+(defn- get-replica-count
+  [{:keys [http-client] :as scheduler} replicaset-url]
+  (-> (api-request http-client replicaset-url)
+      (get-in [:spec :replicas])))
+
+(defmacro k8s-patch-with-retries
+  [patch-cmd retry-condition retry-cmd]
+  `(let [patch-result# (ss/try+
+                         ~patch-cmd
+                         (catch [:status 409] _#
+                           ::conflict))]
+     (if (not= ::conflict patch-result#)
+       patch-result#
+       (if ~retry-condition
+         ~retry-cmd
+         (ss/throw+ {:status 409})))))
+
 (defn- scale-service-up-to
-  [api-server-url http-client service instances']
-  (let [request-url (str api-server-url
+  [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances']
+  (let [replicaset-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
                          (:namespace service)
                          "/replicasets/"
-                         (:k8s-name service))
-        instances (:instances service)]
-    (patch-object-replicas http-client request-url instances instances')))
+                         (:k8s-name service))]
+    (loop [attempt 1
+           instances (:instances service)]
+      (if (<= instances' instances)
+        (log/info "Skipping non-upward scale-up request on " (:id service)
+                  " from " instances " to " instances')
+        (k8s-patch-with-retries
+          (patch-object-replicas http-client replicaset-url instances instances')
+          (< attempt max-conflict-retries)
+          (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- scale-service-by
-  [api-server-url http-client service instances-delta]
-  (let [request-url (str api-server-url
-                         "/apis/extensions/v1beta1/namespaces/"
-                         (:namespace service)
-                         "/replicasets/"
-                         (:k8s-name service))
-        instances (:instances service)
-        instances' (+ instances instances-delta)]
-    (patch-object-replicas http-client request-url instances instances')))
+  [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances-delta]
+  (let [replicaset-url (str api-server-url
+                            "/apis/extensions/v1beta1/namespaces/"
+                            (:namespace service)
+                            "/replicasets/"
+                            (:k8s-name service))]
+    (loop [attempt 1
+           instances (:instances service)]
+      (let [instances' (+ instances instances-delta)]
+        (k8s-patch-with-retries
+          (patch-object-replicas http-client replicaset-url instances instances')
+          (< attempt max-conflict-retries)
+          (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- kill-service-instance
-  [{:keys [api-server-url http-client]} {:keys [id namespace pod-name service-id] :as instance} service]
+  [{:keys [api-server-url http-client] :as scheduler} {:keys [id namespace pod-name service-id] :as instance} service]
   (let [pod-url (str api-server-url
                      "/api/v1/namespaces/"
                      namespace
@@ -253,7 +281,7 @@
     ; request termination of the instance
     (api-request http-client pod-url :request-method :delete :body term-json)
     ; scale down the replicaset
-    (scale-service-by api-server-url http-client service -1)
+    (scale-service-by scheduler service -1)
     ; force-kill the instance (should still be terminating)
     (api-request http-client pod-url :request-method :delete :body kill-json)
     ; report back that the instance was killed
@@ -351,6 +379,7 @@
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
+                                max-conflict-retries
                                 max-name-length
                                 service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
@@ -390,7 +419,7 @@
       (catch [:status 409] e
         {:instance-id id
          :killed? false
-         :message (.getMessage e)
+         :message "Failed to update service specification due to multiple conflicts"
          :service-id service-id
          :status 409})
       (catch Throwable e
@@ -438,9 +467,9 @@
 
   (scale-app [this service-id scale-to-instances]
     (ss/try+
-      (scale-service-up-to api-server-url http-client
-                        (service-id->service this service-id)
-                        scale-to-instances)
+      (scale-service-up-to this
+                           (service-id->service this service-id)
+                           scale-to-instances)
       {:success true
        :status 200
        :result :scaled
@@ -492,11 +521,11 @@
          (utils/pos-int? (:conn-timeout http-options))
          (utils/pos-int? (:socket-timeout http-options))]}
   (let [http-client (http-utils/http-client-factory http-options)
-        name-max-length 63
         service-id->failed-instances-transient-store (atom {})]
     (when authentication
       (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
+                           max-conflict-retries
                            max-name-length
                            service-id->failed-instances-transient-store
                            service-id->service-description-fn)))
