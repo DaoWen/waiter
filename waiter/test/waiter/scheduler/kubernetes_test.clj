@@ -29,7 +29,8 @@
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
    (->
-     {:max-name-length 63
+     {:max-conflict-retries 5
+      :max-name-length 63
       :service-id->failed-instances-transient-store (atom {})
       :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
                                                             service-ids)}
@@ -509,7 +510,7 @@
 
 (deftest test-process-kill-instance-request
   (let [service-id "test-service-id"
-        service (scheduler/make-Service {:id service-id :instances 1})
+        service (scheduler/make-Service {:id service-id :instances 1 :namespace "myself"})
         instance-id "instance-id"
         instance (scheduler/make-ServiceInstance
                    {:extra-ports []
@@ -517,6 +518,7 @@
                     :host "10.141.141.10"
                     :id instance-id
                     :log-directory "/home/myself"
+                    :namespace "myself"
                     :port 8080
                     :protocol "https"
                     :service-id service-id
@@ -526,9 +528,7 @@
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-delete"
         (let [actual (with-redefs [api-request (constantly {:status 200})]
-                       (-> dummy-scheduler
-                           (scheduler/kill-instance instance)
-                           sanitize-k8s-service-records))]
+                       (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
                         :killed? true
                         :message "Successfully killed instance"
@@ -536,12 +536,11 @@
                  actual))))
       (testing "unsuccessful-delete: patch conflict"
         (let [error-msg "Failed to update service specification due to multiple conflicts"
-              actual (with-redefs [api-request (fn mocked-api-request [_ _ & {:keys [request-method]}]
-                                                 (println "method:" request-method)
-                                                 {:status (if (= request-method :patch) 409 200)})]
-                       (-> dummy-scheduler
-                           (scheduler/kill-instance instance)
-                           sanitize-k8s-service-records))]
+              actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
+                                                 (if (= request-method :patch)
+                                                   (ss/throw+ {:status 409})
+                                                   {:spec {:replicas 1}}))]
+                       (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
                         :message error-msg
                         :status 409)
@@ -549,13 +548,11 @@
       (testing "unsuccessful-delete: internal error"
         (let [error-msg "Unable to kill instance"
               actual (with-redefs [api-request (fn [& _] (throw (RuntimeException. error-msg)))]
-                       (-> dummy-scheduler
-                           (scheduler/kill-instance instance)
-                           sanitize-k8s-service-records))]
+                       (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
                         :message error-msg
                         :status 500)
-                 actual)))) )))
+                 actual)))))))
 
 (deftest test-scheduler-app-exists?
   (let [service-id "test-app-1234"
