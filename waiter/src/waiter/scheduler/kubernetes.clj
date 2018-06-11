@@ -37,24 +37,24 @@
 (defn- timestamp-str->datetime [k8s-timestamp-str]
   (du/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
-(defn- use-short-service-hash? [k8s-name-max-length]
+(defn- use-short-service-hash? [k8s-max-name-length]
   ;; This is fairly arbitrary, but if we have at least 48 characters for the app name,
   ;; then we can fit the full 32 character service-id hash, plus a hyphen as a separator,
   ;; and still have 25 characters left for some prefix of the app name.
   ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
-  (< k8s-name-max-length 48))
+  (< k8s-max-name-length 48))
 
 (def ^:const pod-unique-suffix-length
   "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
   5)
 
-(defn- service-id->k8s-name [{:keys [name-max-length] :as scheduler} service-id]
+(defn- service-id->k8s-name [{:keys [max-name-length] :as scheduler} service-id]
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
-        k8s-name-max-length (- name-max-length pod-unique-suffix-length 1)
-        suffix (if (use-short-service-hash? k8s-name-max-length)
+        k8s-max-name-length (- max-name-length pod-unique-suffix-length 1)
+        suffix (if (use-short-service-hash? k8s-max-name-length)
                  (str \- x z)
                  (str \- x y z))
-        prefix-max-length (- k8s-name-max-length (count suffix))
+        prefix-max-length (- k8s-max-name-length (count suffix))
         app-prefix' (cond-> app-prefix
                       (< prefix-max-length (count app-prefix))
                       (subs 0 prefix-max-length))]
@@ -351,7 +351,7 @@
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
-                                name-max-length
+                                max-name-length
                                 service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
   scheduler/ServiceScheduler
@@ -484,7 +484,10 @@
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options force-kill-after-ms framework-id-ttl
-           service-id->service-description-fn url]}]
+           max-conflict-retries max-name-length
+           service-id->service-description-fn url]
+    :or {max-conflict-retries 5
+         max-name-length 63}}]
   {:pre [(utils/pos-int? framework-id-ttl)
          (utils/pos-int? (:conn-timeout http-options))
          (utils/pos-int? (:socket-timeout http-options))]}
@@ -494,6 +497,6 @@
     (when authentication
       (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
-                           name-max-length
+                           max-name-length
                            service-id->failed-instances-transient-store
                            service-id->service-description-fn)))
