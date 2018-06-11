@@ -216,7 +216,7 @@
                       {:op :test, :path "/spec/replicas", :value replicas}
                       {:op :replace, :path "/spec/replicas", :value replicas'}]))
 
-(defn- scale-service-to
+(defn- scale-service-up-to
   [api-server-url http-client service instances']
   (let [request-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
@@ -432,7 +432,7 @@
 
   (scale-app [this service-id scale-to-instances]
     (ss/try+
-      (scale-service-to api-server-url http-client
+      (scale-service-up-to api-server-url http-client
                         (service-id->service this service-id)
                         scale-to-instances)
       {:success true
