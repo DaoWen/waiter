@@ -75,18 +75,18 @@
    [:metadata name namespace [:annotations waiter/service-id]]
    [:status replicas {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
   (let [requested (:replicas spec)
-        running (+ availableReplicas unavailableReplicas)]
+        staged (- (+ availableReplicas unavailableReplicas) replicas)]
     ;; FIXME - catch exceptions and return nil
     (scheduler/make-Service
       {:k8s-name name
        :id service-id
        :instances requested
        :namespace namespace
-       :task-count running
+       :task-count replicas
        :task-stats {:healthy readyReplicas
-                    :running running
-                    :staged (- replicas running)
-                    :unhealthy (- running readyReplicas)}})))
+                    :running replicas
+                    :staged staged
+                    :unhealthy (- unavailableReplicas staged)}})))
 
 (defn- pod->instance-id
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
