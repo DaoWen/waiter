@@ -242,8 +242,8 @@
     (loop [attempt 1
            instances (:instances service)]
       (if (<= instances' instances)
-        (log/info "Skipping non-upward scale-up request on " (:id service)
-                  " from " instances " to " instances')
+        (log/info "Skipping non-upward scale-up request on" (:id service)
+                  "from" instances "to" instances')
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
           (< attempt max-conflict-retries)
@@ -341,18 +341,21 @@
         response-json (api-request http-client request-url
                                    :body (as-json spec-json)
                                    :request-method :post)]
+    (when-not (= "ReplicaSet" (get-in response-json [:type]))
+      (log/error "Invalid response from ReplicaSet create request"
+                 (as-json response-json)))
     (replicaset->Service response-json)))
 
 (defn- delete-service
   [{:keys [api-server-url http-client] :as scheduler} service]
   (when-not service
+    (log/error "Null service passed to kubernetes delete-service.")
     (ss/throw+ {:status 404 :message "Service not found"}))
   (let [replicaset-url (str api-server-url
                             "/apis/extensions/v1beta1/namespaces/"
                             (:namespace service)
                             "/replicasets/"
                             (:k8s-name service))]
-    ; FIXME - catch and handle exceptions
     (patch-object-json replicaset-url http-client
                        [{:op :replace :path "/metadata/annotations/waiter~1app-status" :value "killed"}
                         {:op :replace :path "/spec/replicas" :value 0}])
@@ -412,13 +415,13 @@
       (catch [:status 404] e
         {:instance-id id
          :killed? false
-         :message "Not found"
+         :message "Instance not found"
          :service-id service-id
          :status 404})
       (catch [:status 409] e
         {:instance-id id
          :killed? false
-         :message "Failed to update service specification due to multiple conflicts"
+         :message "Failed to update service specification due to repeated conflicts"
          :service-id service-id
          :status 409})
       (catch Throwable e
@@ -429,10 +432,7 @@
          :status 500})))
 
   (app-exists? [this service-id]
-    (ss/try+
-      (some? (service-id->service this service-id))
-      (catch [:status 404] _
-        (log/warn "app-exists?: service" service-id "does not exist!"))))
+    (some? (service-id->service this service-id)))
 
   (create-app-if-new [this service-id->password-fn descriptor]
     (let [service-id (:service-id descriptor)]
@@ -449,11 +449,8 @@
     (ss/try+
       (let [service (service-id->service this service-id)
             delete-result (delete-service this service)]
-        (comment ;; TODO - remove cached info about this service (once I start caching stuff)
-                 (when delete-result
-                   (remove-failed-instances-for-service! service-id->failed-instances-transient-store service-id)
-                   (scheduler/remove-killed-instances-for-service! service-id)
-                   (swap! service-id->kill-info-store dissoc service-id)))
+        (swap! dissoc service-id->failed-instances-transient-store service-id)
+        (scheduler/remove-killed-instances-for-service! service-id)
         {:result :deleted
          :message (str "Kubernetes deleted " service-id)})
       (catch [:status 404] {}
