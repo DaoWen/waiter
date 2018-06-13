@@ -25,16 +25,23 @@
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
-(defmacro k8s-log [& args]
+(defmacro k8s-log
+  "Log Kuberenets-specific messages."
+  [& args]
   `(log/log "Kubernetes" :debug nil (print-str ~@args)))
 
-(def k8s-api-auth-str (atom nil))
+(def k8s-api-auth-str
+  "Atom containing authentication string for the Kubernetes API server.
+   This value may be periodically refereshed asynchronously."
+  (atom nil))
 
 (def k8s-timestamp-format
   "Kubernetes reports dates in ISO8061 format, sans the milliseconds component."
   (DateTimeFormat/forPattern "yyyy-MM-dd'T'HH:mm:ss'Z'"))
 
-(defn- timestamp-str->datetime [k8s-timestamp-str]
+(defn- timestamp-str->datetime
+  "Parse a Kuberentes API timestamp string."
+  [k8s-timestamp-str]
   (du/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
 (defn- use-short-service-hash? [k8s-max-name-length]
@@ -44,11 +51,13 @@
   ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
   (< k8s-max-name-length 48))
 
-(def ^:const pod-unique-suffix-length
-  "Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen."
-  5)
+;; Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen.
+(def ^:const pod-unique-suffix-length 5)
 
 (defn- service-id->k8s-name [{:keys [max-name-length] :as scheduler} service-id]
+  "Shorten a full Waiter service-id to a Kubernetes-compatible application name.
+   May return the service-id unmodified if it doesn't violate the
+   configured name-length restrictions for this Kubernetes cluster."
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
         k8s-max-name-length (- max-name-length pod-unique-suffix-length 1)
         suffix (if (use-short-service-hash? k8s-max-name-length)
@@ -71,6 +80,7 @@
   (json/write-str data :key-fn #(if (keyword? %) (kw->str %) %)))
 
 (pc/defnk replicaset->Service
+  "Convert a Kuberentes ReplicaSet JSON response into a Waiter Service record."
   [spec
    [:metadata name namespace [:annotations waiter/service-id]]
    [:status {replicas 0} {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
@@ -88,6 +98,8 @@
                     :unhealthy (- replicas readyReplicas staged)}})))
 
 (defn- pod->instance-id
+  "Construct the Waiter instance-id for the given Kubernetes pod incarnation.
+   Note that a new Waiter Service Instance is created each time a pod restarts."
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
   ([pod restart-count]
    (let [pod-name (get-in pod [:metadata :name])
@@ -95,13 +107,18 @@
          service-id (get-in pod [:metadata :annotations :waiter/service-id])]
      (str service-id \. instance-suffix \- restart-count))))
 
-(defn- killed-by-k8s? [pod-terminated-info]
+(defn- killed-by-k8s?
+  "Determine whether a pod was killed (restarted) by its corresponding Kubernetes liveness checks."
+  [pod-terminated-info]
   ;; TODO (#351) - Look at events for messages about liveness probe failures.
   ;; Currently, we assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
   (and (= 137 (:exitCode pod-terminated-info))
        (= "Error" (:reason pod-terminated-info))))
 
-(defn- track-failed-instances [{:keys [service-id] :as live-instance} {:keys [service-id->failed-instances-transient-store]} pod]
+(defn- track-failed-instances!
+  "Update this KuberentesScheduler's service-id->failed-instances-transient-store
+   when a new pod failure is listed in the given pod's lastState container status."
+  [{:keys [service-id] :as live-instance} {:keys [service-id->failed-instances-transient-store]} pod]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
     (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
           newest-failure-start-time (-> newest-failure :startedAt timestamp-str->datetime)
@@ -122,28 +139,35 @@
                  update-in [service-id] assoc newest-failure-id newest-failure-instance))))))
 
 (defn- pod->ServiceInstance
+  "Convert a Kuberentes Pod JSON response into a Waiter Service Instance record."
   [pod]
-  ;; FIXME - catch exceptions and return nil
-  (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
-    (scheduler/make-ServiceInstance
-      {:k8s-name (get-in pod [:metadata :labels :app])
-       :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
-                         Integer/parseInt range next (mapv #(+ port0 %)))
-       :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
-       :host (get-in pod [:status :podIP])
-       :id (pod->instance-id pod)
-       :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
-       :namespace (get-in pod [:metadata :namespace])
-       :pod-name (get-in pod [:metadata :name])
-       :port port0
-       :protocol (get-in pod [:metadata :annotations :waiter/protocol])
-       :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
-       :service-id (get-in pod [:metadata :annotations :waiter/service-id])
-       :started-at (-> pod
-                       (get-in [:status :startTime])
-                       (timestamp-str->datetime))})))
+  (try
+    (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
+      (scheduler/make-ServiceInstance
+        {:k8s-name (get-in pod [:metadata :labels :app])
+         :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
+                           Integer/parseInt range next (mapv #(+ port0 %)))
+         :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
+         :host (get-in pod [:status :podIP])
+         :id (pod->instance-id pod)
+         :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
+         :namespace (get-in pod [:metadata :namespace])
+         :pod-name (get-in pod [:metadata :name])
+         :port port0
+         :protocol (get-in pod [:metadata :annotations :waiter/protocol])
+         :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
+         :service-id (get-in pod [:metadata :annotations :waiter/service-id])
+         :started-at (-> pod
+                         (get-in [:status :startTime])
+                         (timestamp-str->datetime))}))
+    (catch Exception e
+      (log/error e "Error converting pod to waiter service instance" pod)
+      (comment "Returning nil on failure."))))
 
 (defn api-request
+  "Make an HTTP request to the Kuberenets API server using the configured authentication.
+   If data is provided via :body, the application/json content type is added automatically.
+   The response payload (if any) is automatically parsed to JSON."
   [client url & {:keys [body content-type request-method] :as options}]
   (k8s-log "Making request to K8s API server:" url request-method body)
   (ss/try+
@@ -156,7 +180,7 @@
       (k8s-log "Response from K8s API server:" (as-json result))
       result)
     (catch [:status 400] _
-      (log/error "malformed request: " url options))
+      (log/error "Malformed K8s API request: " url options))
     (catch [:client client] response
       (log/error "Request to K8s API server failed: " url options body response)
       (ss/throw+ response))))
@@ -166,6 +190,7 @@
   (get service-description "run-as-user"))
 
 (defn- get-services
+  "Get all Waiter Services (reified as ReplicaSets) running in this Kuberentes cluster."
   [{:keys [api-server-url http-client] :as scheduler}]
   (->>
     "/apis/extensions/v1beta1/replicasets?labelSelector=managed-by=waiter"
@@ -175,6 +200,7 @@
     (mapv replicaset->Service)))
 
 (defn- get-replicaset-pods
+  "Get all Kuberentes pods associated with the given Waiter Service's corresponding ReplicaSet."
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} {:keys [k8s-name namespace]}]
   (->> (str api-server-url
             "/api/v1/namespaces/"
@@ -185,19 +211,23 @@
        :items))
 
 (defn- get-service-instances
+  "Get all Waiter Service Instances associated with the given Waiter Service."
   [{:keys [api-server-url http-client] :as scheduler} basic-service-info]
   (vec (for [pod (get-replicaset-pods scheduler basic-service-info)
              :let [service-instance (pod->ServiceInstance pod)]
              :when (:host service-instance)]
          (doto service-instance
-           (track-failed-instances scheduler pod)))))
+           (track-failed-instances! scheduler pod)))))
 
 (defn instances-breakdown
+  "Get all Waiter Service Instances associated with the given Waiter Service.
+   Grouped by liveness status, i.e.: {:active-instances [...] :failed-instances [...]}."
   [{:keys [service-id->failed-instances-transient-store] :as scheduler} {service-id :id :as basic-service-info}]
   {:active-instances (get-service-instances scheduler basic-service-info)
    :failed-instances (-> @service-id->failed-instances-transient-store (get service-id []) vals vec)})
 
 (defn- patch-object-json
+  "Make a JSON-patch request on a given Kubernetes object."
   [k8s-object-uri http-client ops]
   (api-request http-client k8s-object-uri
                :body (as-json ops)
@@ -205,20 +235,24 @@
                :request-method :patch))
 
 (defn- patch-object-replicas
+  "Update the replica count in the given Kubernetes object's spec."
   [k8s-object-uri http-client replicas replicas']
   (patch-object-json http-client k8s-object-uri
-                     ;; NOTE: ~1 is JSON-patch escape syntax for a "/" in a key name
-                     ;; see http://jsonpatch.com/#json-pointer
+                     ;; NOTE: ~1 is JSON-patch escape syntax for a "/" in a key name.
+                     ;; See http://jsonpatch.com/#json-pointer
                      [{:op :test :path "/metadata/annotations/waiter~1app-status" :value "live"}
                       {:op :test :path "/spec/replicas" :value replicas}
                       {:op :replace :path "/spec/replicas" :value replicas'}]))
 
 (defn- get-replica-count
+  "Query the current replica count for the given Kubernetes object."
   [{:keys [http-client] :as scheduler} replicaset-url]
   (-> (api-request http-client replicaset-url)
       (get-in [:spec :replicas])))
 
 (defmacro k8s-patch-with-retries
+  "Query the current replica count for the given Kubernetes object,
+   retrying a limited number of times in the event of an HTTP 409 conflict error."
   [patch-cmd retry-condition retry-cmd]
   `(let [patch-result# (ss/try+
                          ~patch-cmd
@@ -231,6 +265,8 @@
          (ss/throw+ {:status 409})))))
 
 (defn- scale-service-up-to
+  "Scale the number of instances for a given service to a specific number.
+   Only used for upward scaling. No-op if it would result in downward scaling."
   [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances']
   (let [replicaset-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
@@ -247,7 +283,9 @@
           (< attempt max-conflict-retries)
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
-(defn- scale-service-by
+(defn- scale-service-by-delta
+  "Scale the number of instances for a given service by a given delta.
+   Can scale either upward (positive delta) or downward (negative delta)."
   [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances-delta]
   (let [replicaset-url (str api-server-url
                             "/apis/extensions/v1beta1/namespaces/"
@@ -263,6 +301,8 @@
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- kill-service-instance
+  "Safely kill the Kubernetes pod corresponding to the given Waiter Service Instance.
+   Returns 200 (OK) on success, but throws on failure."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id namespace pod-name service-id] :as instance} service]
   (let [pod-url (str api-server-url
                      "/api/v1/namespaces/"
@@ -277,13 +317,13 @@
                               :message message :service-id service-id :status status})]
     ; request termination of the instance
     (api-request http-client pod-url :request-method :delete :body term-json)
-    ; scale down the replicaset
-    (scale-service-by scheduler service -1)
+    ; scale down the replicaset to reflect removal of this instance
+    (scale-service-by-delta scheduler service -1)
     ; force-kill the instance (should still be terminating)
     (api-request http-client pod-url :request-method :delete :body kill-json)
-    ; report back that the instance was killed
+    ; report back that the instance was killed successfully
     (scheduler/process-instance-killed! instance)
-    (make-kill-response true "pod was killed" 200)))
+    200))
 
 (defn- service-spec
   [service-id service-description scheduler service-id->password-fn]
@@ -366,16 +406,20 @@
 
 (defn service-id->service
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
-  (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-    (let [replicasets (->> (str api-server-url
-                                "/apis/extensions/v1beta1/namespaces/"
-                                service-ns
-                                "/replicasets?labelSelector=managed-by=waiter,app="
-                                (service-id->k8s-name scheduler service-id))
-                           (api-request http-client)
-                           :items)]
-      (when (seq replicasets)
-        (-> replicasets first replicaset->Service)))))
+  (try
+    (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
+      (let [replicasets (->> (str api-server-url
+                                  "/apis/extensions/v1beta1/namespaces/"
+                                  service-ns
+                                  "/replicasets?labelSelector=managed-by=waiter,app="
+                                  (service-id->k8s-name scheduler service-id))
+                             (api-request http-client)
+                             :items)]
+        (when (seq replicasets)
+          (-> replicasets first replicaset->Service))))
+    (catch Exception e
+      (log/error e "Error service for service-id" service-id)
+      (comment "Returning nil on failure."))))
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
@@ -404,12 +448,12 @@
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
       (let [service (service-id->service this service-id)
-            kill-result (kill-service-instance this instance service)]
+            kill-result-status (kill-service-instance this instance service)]
         {:instance-id id
          :killed? true
          :message "Successfully killed instance"
          :service-id service-id
-         :status (:status kill-result)})
+         :status  kill-result-status})
       (catch [:status 404] e
         {:instance-id id
          :killed? false
@@ -422,7 +466,7 @@
          :message "Failed to update service specification due to repeated conflicts"
          :service-id service-id
          :status 409})
-      (catch Throwable e
+      (catch Exception e
         {:instance-id id
          :killed? false
          :message (.getMessage e)
