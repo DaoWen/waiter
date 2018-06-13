@@ -85,7 +85,7 @@
        :task-stats {:healthy readyReplicas
                     :running replicas
                     :staged staged
-                    :unhealthy (- unavailableReplicas staged)}})))
+                    :unhealthy (- replicas readyReplicas staged)}})))
 
 (defn- pod->instance-id
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
