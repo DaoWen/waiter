@@ -534,8 +534,18 @@
                         :message "Successfully killed instance"
                         :status 200)
                  actual))))
+      (testing "unsuccessful-delete: no such instance"
+        (let [error-msg "Instance not found"
+              actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
+                                                 (when (= request-method :delete)
+                                                   (ss/throw+ {:status 404})))]
+                       (scheduler/kill-instance dummy-scheduler instance))]
+          (is (= (assoc partial-expected
+                        :message error-msg
+                        :status 404)
+                 actual))))
       (testing "unsuccessful-delete: patch conflict"
-        (let [error-msg "Failed to update service specification due to multiple conflicts"
+        (let [error-msg "Failed to update service specification due to repeated conflicts"
               actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
                                                  (if (= request-method :patch)
                                                    (ss/throw+ {:status 409})
