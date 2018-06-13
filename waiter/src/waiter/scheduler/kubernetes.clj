@@ -96,10 +96,8 @@
      (str service-id \. instance-suffix \- restart-count))))
 
 (defn- killed-by-k8s? [pod-terminated-info]
-  ;; TODO - Look at events for messages about liveness probe failures:
-  ;; /api/v1/namespaces/<ns>/events?fieldSelector=involvedObject.namespace=<ns>,involvedObject.name=<instance-id>,reason=Unhealthy
-  ;; (-> event :message (string/starts-with? "Liveness probe failed:")) #{:never-passed-health-checks}
-  ;; For now, we just assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
+  ;; TODO (#351) - Look at events for messages about liveness probe failures.
+  ;; Currently, we assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
   (and (= 137 (:exitCode pod-terminated-info))
        (= "Error" (:reason pod-terminated-info))))
 
