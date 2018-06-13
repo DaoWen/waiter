@@ -73,10 +73,9 @@
 (pc/defnk replicaset->Service
   [spec
    [:metadata name namespace [:annotations waiter/service-id]]
-   [:status replicas {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
-  (let [requested (:replicas spec)
+   [:status {replicas 0} {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
+  (let [requested (get spec :replicas 0)
         staged (- (+ availableReplicas unavailableReplicas) replicas)]
-    ;; FIXME - catch exceptions and return nil
     (scheduler/make-Service
       {:k8s-name name
        :id service-id
