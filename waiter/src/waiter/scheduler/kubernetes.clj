@@ -160,7 +160,7 @@
          :started-at (-> pod
                          (get-in [:status :startTime])
                          (timestamp-str->datetime))}))
-    (catch Exception e
+    (catch Throwable e
       (log/error e "Error converting pod to waiter service instance" pod)
       (comment "Returning nil on failure."))))
 
@@ -368,11 +368,12 @@
                             'waiter.fn/upper-case string/upper-case}}]
     (try
       (->> rs-spec-file-path slurp (edn/read-string edn-opts))
-      (catch Exception e
+      (catch Throwable e
         (log/error e "Error creating ReplicaSet specification for" service-id)
         (throw e)))))
 
 (defn- create-service
+  "Reify a Waiter Service as a Kuberentes ReplicaSet."
   [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec scheduler service-id service-description service-id->password-fn)
@@ -389,6 +390,9 @@
     (replicaset->Service response-json)))
 
 (defn- delete-service
+  "Delete the Kubernetes ReplicaSet corresponding to a Waiter Service.
+   Ensures that all controlled Pods are deleted before removing the ReplicaSet.
+   This operation will leave Waiter in a sane state on a failure."
   [{:keys [api-server-url http-client] :as scheduler} service]
   (when-not service
     (log/error "Null service passed to kubernetes delete-service.")
@@ -409,6 +413,8 @@
      :result :deleted}))
 
 (defn service-id->service
+  "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
+   and return a corresponding Waiter Service record."
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
   (try
     (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
@@ -420,12 +426,15 @@
                              (api-request http-client)
                              :items)]
         (when (seq replicasets)
+          (when (second replicasets)
+            (log/warn "Multiple matches found for Waiter Service"
+                      service-id replicasets))
           (-> replicasets first replicaset->Service))))
-    (catch Exception e
+    (catch Throwable e
       (log/error e "Error creating service record for service-id" service-id)
       (comment "Returning nil on failure."))))
 
-; The KubernetesScheduler
+; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
                                 max-conflict-retries
                                 max-name-length
@@ -472,7 +481,7 @@
          :message "Failed to update service specification due to repeated conflicts"
          :service-id service-id
          :status 409})
-      (catch Exception e
+      (catch Throwable e
         {:instance-id id
          :killed? false
          :message (.getMessage e)
@@ -501,24 +510,33 @@
         (scheduler/remove-killed-instances-for-service! service-id)
         {:result :deleted
          :message (str "Kubernetes deleted " service-id)})
-      (catch [:status 404] {}
+      (catch [:status 404] _
         (log/warn "[delete-app] Service does not exist:" service-id)
         {:result :no-such-service-exists
          :message "Kubernetes reports service does not exist"})
       (catch [:status 409] e
         (log/warn "Kubernetes ReplicaSet conflict while deleting"
-                  {:service-id service-id}))))
+                  {:service-id service-id})
+        {:result :conflict
+         :message "Kubernetes ReplicaSet conflict while deleting"})))
 
   (scale-app [this service-id scale-to-instances]
     (ss/try+
-      (scale-service-up-to this
-                           (service-id->service this service-id)
-                           scale-to-instances)
+      (scale-service-up-to
+        this
+        (service-id->service this service-id)
+        scale-to-instances)
       {:success true
        :status 200
        :result :scaled
        :message (str "Scaled to " scale-to-instances)}
+      (catch [:status 409] e
+        {:success false
+         :status 409
+         :result :conflict
+         :message "Scaling failed due to repeated patch conflicts"})
       (catch Throwable e
+        (log/error e "Error while scaling waiter service" service-id)
         {:success false
          :status 500
          :result :failed
@@ -541,6 +559,8 @@
     {:service-id->failed-instances @service-id->failed-instances-transient-store}))
 
 (defn- start-auth-renewer
+  "Initialize the k8s-api-auth-str atom,
+   and optionally start a chime to periodically referesh the value."
   [{:keys [refresh-delay-minutes refresh-fn]}]
   (let [refresh (-> refresh-fn utils/resolve-symbol deref)
         auth-update-fn (fn auth-update []
