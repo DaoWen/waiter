@@ -63,18 +63,21 @@
   (let [test-cases [{:name "get-instances no response"
                      :kubernetes-response nil
                      :expected-response {:active-instances []
-                                         :failed-instances []}}
+                                         :failed-instances []
+                                         :killed-instances []}}
 
                     {:name "get-instances empty response"
                      :kubernetes-response {}
                      :expected-response {:active-instances []
-                                         :failed-instances []}}
+                                         :failed-instances []
+                                         :killed-instances []}}
 
                     {:name "get-instances empty-app response"
                      :kubernetes-response {:apiVersion "v1" :items [] :kind "List"
                                            :metadata {:resourceVersion "" :selfLink ""}}
                      :expected-response {:active-instances []
-                                         :failed-instances []}}
+                                         :failed-instances []
+                                         :killed-instances []}}
 
                     {:name "get-instances valid response with task failure"
                      :kubernetes-response
@@ -164,7 +167,8 @@
                                             :port 8080,
                                             :protocol "https",
                                             :service-id "test-app-1234",
-                                            :started-at (du/str-to-date "2014-09-12T23:23:41Z" k8s-timestamp-format)})]}}
+                                            :started-at (du/str-to-date "2014-09-12T23:23:41Z" k8s-timestamp-format)})]
+                      :killed-instances []}}
 
                     {:name "get-instances valid response without task failure"
                      :kubernetes-response
@@ -242,7 +246,8 @@
                                             :protocol "http",
                                             :service-id "test-app-1234",
                                             :started-at (du/str-to-date "2014-09-14T00:24:48Z" k8s-timestamp-format)})]
-                      :failed-instances []}}]]
+                      :failed-instances []
+                      :killed-instances []}}]]
     (doseq [{:keys [expected-response kubernetes-response name]} test-cases]
       (testing (str "Test " name)
         (let [service-id "test-app-1234"
@@ -456,7 +461,8 @@
                         :protocol "https"
                         :service-id "test-app-1234"
                         :started-at (du/str-to-date "2014-09-13T00:24:47Z" k8s-timestamp-format)})]
-                    :failed-instances []}
+                    :failed-instances []
+                    :killed-instances []}
 
                    (scheduler/make-Service {:id "test-app-6789" :instances 3 :task-count 3
                                             :task-stats {:running 3 :healthy 1 :unhealthy 2 :staged 0}})
@@ -498,7 +504,8 @@
                         :port 8080
                         :protocol "http"
                         :service-id "test-app-6789"
-                        :started-at (du/str-to-date "2014-09-13T00:24:36Z" k8s-timestamp-format)})]})
+                        :started-at (du/str-to-date "2014-09-13T00:24:36Z" k8s-timestamp-format)})]
+                    :killed-instances []})
         dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
         response-iterator (.iterator api-server-responses)
         actual (with-redefs [api-request (fn [& _] (.next response-iterator))]
