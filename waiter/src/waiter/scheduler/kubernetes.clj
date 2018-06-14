@@ -383,7 +383,7 @@
         response-json (api-request http-client request-url
                                    :body (as-json spec-json)
                                    :request-method :post)]
-    (when-not (= "ReplicaSet" (get-in response-json [:type]))
+    (when-not (= "ReplicaSet" (:kind response-json))
       (log/error "Invalid response from ReplicaSet create request"
                  (as-json response-json)))
     (replicaset->Service response-json)))
@@ -497,7 +497,7 @@
     (ss/try+
       (let [service (service-id->service this service-id)
             delete-result (delete-service this service)]
-        (swap! dissoc service-id->failed-instances-transient-store service-id)
+        (swap! service-id->failed-instances-transient-store dissoc service-id)
         (scheduler/remove-killed-instances-for-service! service-id)
         {:result :deleted
          :message (str "Kubernetes deleted " service-id)})
