@@ -21,7 +21,8 @@
  ; ---------- Scheduling ----------
 
  :scheduler-config {:kind :kubernetes
-                    :kubernetes {:url "http://localhost:8001"}}
+                    :kubernetes {:url "http://localhost:8001"
+                                 :rs-spec-file-path "./specs/k8s-default-pod.edn"}}
 
  ; ---------- Error Handling ----------
 
