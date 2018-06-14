@@ -224,7 +224,8 @@
    Grouped by liveness status, i.e.: {:active-instances [...] :failed-instances [...]}."
   [{:keys [service-id->failed-instances-transient-store] :as scheduler} {service-id :id :as basic-service-info}]
   {:active-instances (get-service-instances scheduler basic-service-info)
-   :failed-instances (-> @service-id->failed-instances-transient-store (get service-id []) vals vec)})
+   :failed-instances (-> @service-id->failed-instances-transient-store (get service-id []) vals vec)
+   :killed-instances (scheduler/service-id->killed-instances service-id)})
 
 (defn- patch-object-json
   "Make a JSON-patch request on a given Kubernetes object."
