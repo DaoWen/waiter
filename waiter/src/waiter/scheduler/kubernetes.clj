@@ -326,14 +326,14 @@
     200))
 
 (defn- service-spec
-  [service-id service-description scheduler service-id->password-fn]
-  (let [spec-file-path "./specs/k8s-default-pod.edn" ; TODO - allow user to provide this via the config file
-        {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
+  "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
+  [{:keys [rs-spec-file-path pod-base-port] :as scheduler} service-id service-description service-id->password-fn]
+  (let [{:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
                 health-check-max-consecutive-failures mem min-instances ports run-as-user]} service-description
         home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
-        port0 8080 ;; TODO - get this port number from scheduler settings
+        port0 pod-base-port
         template-env (into [;; We set these two "MESOS_*" variables to improve interoperability
                             {:name "MESOS_DIRECTORY" :value home-path}
                             {:name "MESOS_SANDBOX" :value home-path}]
@@ -366,12 +366,16 @@
                             'waiter.fn/lower-case string/upper-case
                             'waiter.fn/str #(apply str %)
                             'waiter.fn/upper-case string/upper-case}}]
-    (->> spec-file-path slurp (edn/read-string edn-opts))))
+    (try
+      (->> rs-spec-file-path slurp (edn/read-string edn-opts))
+      (catch Exception e
+        (log/error e "Error creating ReplicaSet specification for" service-id)
+        (throw e)))))
 
 (defn- create-service
   [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
-        spec-json (service-spec service-id service-description scheduler service-id->password-fn)
+        spec-json (service-spec scheduler service-id service-description service-id->password-fn)
         request-url (str api-server-url
                          "/apis/extensions/v1beta1/namespaces/"
                          (service-description->namespace service-description)
@@ -418,13 +422,15 @@
         (when (seq replicasets)
           (-> replicasets first replicaset->Service))))
     (catch Exception e
-      (log/error e "Error service for service-id" service-id)
+      (log/error e "Error creating service record for service-id" service-id)
       (comment "Returning nil on failure."))))
 
 ; The KubernetesScheduler
 (defrecord KubernetesScheduler [api-server-url http-client
                                 max-conflict-retries
                                 max-name-length
+                                pod-base-port
+                                rs-spec-file-path
                                 service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
   scheduler/ServiceScheduler
@@ -551,10 +557,8 @@
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options force-kill-after-ms framework-id-ttl
-           max-conflict-retries max-name-length
-           service-id->service-description-fn url]
-    :or {max-conflict-retries 5
-         max-name-length 63}}]
+           max-conflict-retries max-name-length pod-base-port rs-spec-file-path
+           service-id->service-description-fn url]}]
   {:pre [(utils/pos-int? framework-id-ttl)
          (utils/pos-int? (:conn-timeout http-options))
          (utils/pos-int? (:socket-timeout http-options))]}
@@ -565,5 +569,7 @@
     (->KubernetesScheduler url http-client
                            max-conflict-retries
                            max-name-length
+                           pod-base-port
+                           rs-spec-file-path
                            service-id->failed-instances-transient-store
                            service-id->service-description-fn)))
