@@ -67,7 +67,8 @@
   "Forces a call to update-service-health"
   [{:keys [id->service-agent port->reservation-atom] :as scheduler} {:keys [port-grace-period-ms]}]
   (send id->service-agent update-service-health port->reservation-atom port-grace-period-ms nil)
-  (ensure-agent-finished scheduler))
+  (ensure-agent-finished scheduler)
+  (Thread/sleep 1000))
 
 (defn- force-maintain-instance-scale
   "Forces a call to maintain-instance-scale"
