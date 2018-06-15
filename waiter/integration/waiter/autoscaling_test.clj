@@ -144,7 +144,7 @@
 
 (deftest ^:parallel ^:integration-slow ^:resource-heavy test-expired-instance
   (testing-using-waiter-url
-    (let [extra-headers {:x-waiter-instance-expiry-mins 1 ;; can't set it any lower :(
+    (let [extra-headers {:x-waiter-instance-expiry-mins 2 ;; can't set it any lower :(
                          :x-waiter-name (rand-name)}
           {:keys [cookies instance-id service-id] :as response}
           (make-request-with-debug-info extra-headers #(make-kitchen-request waiter-url %))
@@ -157,7 +157,7 @@
               cancellation-token-atom (atom false)
               responses (parallelize-requests
                           1
-                          30
+                          60
                           (fn []
                             (let [{:keys [instance-id] :as response}
                                   (make-request-with-debug-info
