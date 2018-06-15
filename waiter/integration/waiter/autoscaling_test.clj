@@ -48,7 +48,7 @@
       (scaling-for-service-test "Scaling healthy app" waiter-url 3 concurrency-level
                                 #(make-kitchen-request waiter-url custom-headers)))))
 
-(deftest ^:parallel ^:integration-slow ^:resource-heavy test-scaling-unhealthy-app
+(deftest ^:parallel ^:integration-fast test-scaling-unhealthy-app
   (testing-using-waiter-url
     (let [concurrency-level 3
           custom-headers {:x-waiter-concurrency-level concurrency-level
