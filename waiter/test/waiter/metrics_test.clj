@@ -62,8 +62,10 @@
     (service-counter "service-id" "foo")
     (service-counter "service-id" "foo" "bar")
     (service-counter "service-id" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getCounters mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "services.service-id.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getCounters mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-service-histogram
@@ -72,8 +74,10 @@
     (service-histogram "service-id" "foo")
     (service-histogram "service-id" "foo" "bar")
     (service-histogram "service-id" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getHistograms mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "services.service-id.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getHistograms mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-service-timer
@@ -82,8 +86,10 @@
     (service-timer "service-id" "foo")
     (service-timer "service-id" "foo" "bar")
     (service-timer "service-id" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getTimers mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "services.service-id.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getTimers mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-service-meter
@@ -92,8 +98,10 @@
     (service-meter "service-id" "foo")
     (service-meter "service-id" "foo" "bar")
     (service-meter "service-id" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getMeters mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "services.service-id.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getMeters mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-waiter-counter
@@ -102,8 +110,10 @@
     (waiter-counter "core" "foo")
     (waiter-counter "core" "foo" "bar")
     (waiter-counter "core" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getCounters mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "waiter.core.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getCounters mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-waiter-meter
@@ -112,8 +122,10 @@
     (waiter-meter "core" "foo")
     (waiter-meter "core" "foo" "bar")
     (waiter-meter "core" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getMeters mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "waiter.core.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getMeters mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-waiter-timer
@@ -122,8 +134,10 @@
     (waiter-timer "core" "foo")
     (waiter-timer "core" "foo" "bar")
     (waiter-timer "core" "fee" "fie")
+    (is (test-helpers/wait-for
+          #(= 3 (count (.getTimers mc/default-registry all-metrics-match-filter)))
+          :interval 1 :timeout 5))
     (is (every? #(str/starts-with? % "waiter.core.") (.getNames mc/default-registry)))
-    (is (= 3 (count (.getTimers mc/default-registry all-metrics-match-filter))))
     (.removeMatching mc/default-registry all-metrics-match-filter)))
 
 (deftest test-update-counter

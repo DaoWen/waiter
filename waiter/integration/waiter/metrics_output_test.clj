@@ -183,7 +183,7 @@
           service-name (rand-name)
           sleep-millis 20000
           min-startup-seconds 10 ; 20s +/- 10s for 2 polls with 5s granularity
-          max-startup-seconds 60 ; the service shouldn't take more than a minute to become healthy
+          max-startup-seconds 120 ; we've seen kitchen take up to 90 seconds to start up in Travis-CI
           instance-count 2
           req-headers {:x-waiter-cmd (kitchen-cmd (str "-p $PORT0 --start-up-sleep-ms " sleep-millis))
                        :x-waiter-cmd-type "shell"
