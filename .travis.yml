@@ -43,15 +43,10 @@ matrix:
       before_script: cd waiter && voom-build
       script: ./bin/ci/run-integration-tests-k8s-scheduler.sh parallel-test integration-fast
 
-    - env: "NAME='Waiter integration tests: kubernetes-slow-heavy'"
+    - env: "NAME='Waiter integration tests: kubernetes-slow'"
       services: docker
       before_script: cd waiter && voom-build
-      script: ./bin/ci/run-integration-tests-k8s-scheduler.sh test integration-slow-heavy
-
-    - env: "NAME='Waiter integration tests: kubernetes-slow-lite'"
-      services: docker
-      before_script: cd waiter && voom-build
-      script: ./bin/ci/run-integration-tests-k8s-scheduler.sh parallel-test integration-slow-lite
+      script: ./bin/ci/run-integration-tests-k8s-scheduler.sh parallel-test integration-slow
 
     - env: "NAME='Waiter integration tests: marathon-fast'"
       services: docker
