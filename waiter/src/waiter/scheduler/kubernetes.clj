@@ -544,12 +544,9 @@
          :message (str "Scaling failed: " (.getMessage e))})))
 
   (retrieve-directory-content [_ service-id instance-id _ relative-directory]
-    ;; TODO - can I implement this?
+    ;; TODO (#357) - get access to the working directory contents in the pod
     ;; I could just return the log for each pod:
     ;; /api/v1/namespaces/{ns}/pods/{instance-id}/log
-    ;; I could also do this by starting a little python file server in the home directory.
-    ;; I'd start it with a timeout of 5 minutes or something,
-    ;; and if no requests come in for 5 minutes, then we kill it.
     [])
 
   (service-id->state [_ service-id]
