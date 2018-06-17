@@ -211,9 +211,9 @@
               (is (every? some? [service-scheduling-metric service-startup-metric waiter-scheduling-metric])))
             (testing "expected launch-metric instance counts"
               (is (== instance-count
-                      (get service-scheduling-metric "count")))
+                      (get service-scheduling-metric "count" -1)))
               (is (<= instance-count
-                      (get waiter-scheduling-metric "count"))))
+                      (get waiter-scheduling-metric "count" -1))))
             (testing "reasonable values for current service's startup-time metrics"
               (is (<= min-startup-seconds
                       (get-percentile-value service-startup-metric "1.0")
