@@ -9,7 +9,7 @@
 #
 # Runs the Waiter integration tests, and dumps log files if the tests fail.
 
-set -ev
+set -ex
 
 TEST_COMMAND=${1:-parallel-test}
 TEST_SELECTOR=${2:-integration}
