@@ -515,7 +515,7 @@
     (assert-data-equal expected actual)
     (scheduler/preserve-only-killed-instances-for-services! [])))
 
-(deftest test-process-kill-instance-request
+(deftest test-kill-instance
   (let [service-id "test-service-id"
         service (scheduler/make-Service {:id service-id :instances 1 :namespace "myself"})
         instance-id "instance-id"
