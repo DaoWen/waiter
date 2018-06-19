@@ -257,9 +257,9 @@
                                 (->> (scheduler/get-instances dummy-scheduler service-id)
                                      sanitize-k8s-service-records))]
           (is (= expected-response actual-response) (str name))
-          (is (= (-> expected-response :failed-instances count)
-                 (-> dummy-scheduler :service-id->failed-instances-transient-store deref count)
-                 (str name)))
+          (is (== (-> expected-response :failed-instances count)
+                  (-> dummy-scheduler :service-id->failed-instances-transient-store deref count))
+              (str name))
           (scheduler/preserve-only-killed-instances-for-services! []))))))
 
 (deftest test-scheduler-get-apps
@@ -537,7 +537,7 @@
         partial-expected {:instance-id instance-id :killed? false :service-id service-id}]
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-delete"
-        (let [actual (with-redefs [api-request (constantly {:status 200})]
+        (let [actual (with-redefs [api-request (constantly {:status "OK"})]
                        (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
                         :killed? true
@@ -609,311 +609,73 @@
                             (scheduler/app-exists? dummy-scheduler service-id))]
         (is (= expected-result actual-result))))))
 
-(comment "Disabled tests"
-
-(deftest test-service-id->failed-instances-transient-store
-  (let [faled-instance-response-fn (fn [service-id instance-id]
-                                     {:appId service-id,
-                                      :host (str "10.141.141." instance-id),
-                                      :message "Abnormal executor termination",
-                                      :state (str instance-id "failed"),
-                                      :taskId (str service-id "." instance-id),
-                                      :timestamp "2014-09-12T23:23:41.711Z",
-                                      :version "2014-09-12T23:28:21.737Z"})
-        framework-id "framework-id"
-        health-check-url "/status"
-        slave-directory "/slave"
-        common-extractor-fn (fn [instance-id kubernetes-task-response]
-                              (let [{:keys [appId host message slaveId]} kubernetes-task-response]
-                                (cond-> {:service-id appId
-                                         :host host
-                                         :health-check-path health-check-url}
-                                  (and framework-id slaveId)
-                                  (assoc :log-directory
-                                         (str slave-directory "/" slaveId "/frameworks/" framework-id
-                                              "/executors/" instance-id "/runs/latest"))
-                                  message
-                                  (assoc :message (str/trim message)))))
-        service-id-1 "test-service-id-failed-instances-1"
-        service-id-2 "test-service-id-failed-instances-2"
-        service-id->failed-instances-transient-store (atom {})]
-    (scheduler/preserve-only-killed-instances-for-services! [])
-    (preserve-only-failed-instances-for-services! service-id->failed-instances-transient-store [])
-    (is (= 0 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 1 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 1 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "B") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "B") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "C") common-extractor-fn)
-    (is (= 3 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "D") common-extractor-fn)
-    (is (= 4 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (scheduler/preserve-only-killed-instances-for-services! [])
-    (preserve-only-failed-instances-for-services! service-id->failed-instances-transient-store [])
-    (is (= 0 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 1 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "B") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "A") common-extractor-fn)
-    (is (= 2 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "C") common-extractor-fn)
-    (is (= 3 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "D") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "E") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "F") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "G") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "H") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-1 (faled-instance-response-fn service-id-1 "I") common-extractor-fn)
-    (is (= 9 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (is (= 0 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-2))))
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-2 (faled-instance-response-fn service-id-2 "X") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-2 (faled-instance-response-fn service-id-2 "Y") common-extractor-fn)
-    (parse-and-store-failed-instance! service-id->failed-instances-transient-store service-id-2 (faled-instance-response-fn service-id-2 "Z") common-extractor-fn)
-    (remove-failed-instances-for-service! service-id->failed-instances-transient-store service-id-1)
-    (is (= 0 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (is (= 3 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-2))))
-    (preserve-only-failed-instances-for-services! service-id->failed-instances-transient-store [service-id-2])
-    (is (= 0 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-1))))
-    (is (= 3 (count (service-id->failed-instances service-id->failed-instances-transient-store service-id-2))))))
-
-(deftest test-retrieve-log-url
-  (let [instance-id "service-id-1.instance-id-2"
-        host "www.example.com"
-        mesos-api (Object.)]
-    (with-redefs [mesos/get-agent-state
-                  (fn [in-mesos-api in-host]
-                    (is (= mesos-api in-mesos-api))
-                    (is (= host in-host))
-                    (let [response-body "
-                          {
-                                        \"frameworks\": [{
-                                        \"role\": \"kubernetes\",
-                                        \"completed_executors\": [{
-                                        \"id\": \"service-id-1.instance-id-1\",
-                                        \"directory\": \"/path/to/instance1/directory\"
-                                        }],
-                                        \"executors\": [{
-                                        \"id\": \"service-id-1.instance-id-2\",
-                                        \"directory\": \"/path/to/instance2/directory\"
-                                        }]
-                                        }]
-                                        }"]
-                      (-> response-body json/read-str walk/keywordize-keys)))]
-      (is (= "/path/to/instance2/directory" (retrieve-log-url mesos-api instance-id host))))))
-
-(deftest test-retrieve-directory-content-from-host
-  (let [service-id "service-id-1"
-        instance-id "service-id-1.instance-id-2"
-        host "www.example.com"
-        mesos-slave-port 5051
-        directory "/path/to/instance2/directory"
-        mesos-api (mesos/api-factory (Object.) {} mesos-slave-port directory)]
-    (with-redefs [mesos/list-directory-content
-                  (fn [in-mesos-api in-host in-directory]
-                    (is (= mesos-api in-mesos-api))
-                    (is (= host in-host))
-                    (is (= directory in-directory))
-                    (let [response-body "
-                          [{\"nlink\": 1, \"path\": \"/path/to/instance2/directory/fil1\", \"size\": 1000},
-                                        {\"nlink\": 2, \"path\": \"/path/to/instance2/directory/dir2\", \"size\": 2000},
-                                        {\"nlink\": 1, \"path\": \"/path/to/instance2/directory/fil3\", \"size\": 3000},
-                                        {\"nlink\": 2, \"path\": \"/path/to/instance2/directory/dir4\", \"size\": 4000}]"]
-                      (-> response-body json/read-str walk/keywordize-keys)))]
-      (let [expected-result (list {:name "fil1"
-                                   :size 1000
-                                   :type "file"
-                                   :url "http://www.example.com:5051/files/download?path=/path/to/instance2/directory/fil1"}
-                                  {:name "dir2"
-                                   :size 2000
-                                   :type "directory"
-                                   :path "/path/to/instance2/directory/dir2"}
-                                  {:name "fil3"
-                                   :size 3000
-                                   :type "file"
-                                   :url "http://www.example.com:5051/files/download?path=/path/to/instance2/directory/fil3"}
-                                  {:name "dir4"
-                                   :size 4000
-                                   :type "directory"
-                                   :path "/path/to/instance2/directory/dir4"})]
-        (is (= expected-result (retrieve-directory-content-from-host mesos-api service-id instance-id host directory)))))))
-
-(deftest test-kubernetes-descriptor
-  (let [service-id->password-fn (fn [service-id] (str service-id "-password"))]
-    (testing "basic-test-with-defaults"
-      (let [expected {:id "test-service-1"
-                      :labels {:source "waiter"
-                               :user "test-user"}
-                      :env {"BAZ" "quux"
-                            "FOO" "bar"
-                            "HOME" "/home/path/test-user"
-                            "LOGNAME" "test-user"
-                            "USER" "test-user"
-                            "WAITER_CPUS" "1"
-                            "WAITER_MEM_MB" "1536"
-                            "WAITER_PASSWORD" "test-service-1-password"
-                            "WAITER_SERVICE_ID" "test-service-1"
-                            "WAITER_USERNAME" "waiter"}
-                      :cmd "test-command"
-                      :cpus 1
-                      :disk nil
-                      :mem 1536
-                      :healthChecks [{:protocol "HTTP"
-                                      :path "/status"
-                                      :gracePeriodSeconds 111
-                                      :intervalSeconds 10
-                                      :portIndex 0
-                                      :timeoutSeconds 20
-                                      :maxConsecutiveFailures 5}]
-                      :backoffFactor 2
-                      :ports [0 0]
-                      :user "test-user"}
-            home-path-prefix "/home/path/"
-            service-id "test-service-1"
-            service-description {"backend-proto" "http"
-                                 "cmd" "test-command"
-                                 "cpus" 1
-                                 "mem" 1536
-                                 "run-as-user" "test-user"
-                                 "ports" 2
-                                 "restart-backoff-factor" 2
-                                 "grace-period-secs" 111
-                                 "health-check-interval-secs" 10
-                                 "health-check-max-consecutive-failures" 5
-                                 "env" {"FOO" "bar"
-                                        "BAZ" "quux"}}
-            actual (kubernetes-descriptor home-path-prefix service-id->password-fn
-                                          {:service-id service-id, :service-description service-description})]
-        (is (= expected actual))))))
-
-(deftest test-kill-instance-last-force-kill-time-store
-  (let [current-time (t/now)
-        service-id "service-1"
-        instance-id "service-1.A"
-        make-kubernetes-scheduler #(->MarathonScheduler {} {} (constantly nil) "/home/path/"
-                                                        (atom {}) %1 (constantly nil) %2 (constantly true))
-        successful-kill-result {:instance-id instance-id :killed? true :service-id service-id}
-        failed-kill-result {:instance-id instance-id :killed? false :service-id service-id}]
-    (with-redefs [t/now (fn [] current-time)]
-
-      (testing "normal-kill"
-        (let [service-id->kill-info-store (atom {})
-              kubernetes-scheduler (make-kubernetes-scheduler service-id->kill-info-store 1000)]
-          (with-redefs [process-kill-instance-request (fn [_ in-service-id in-instance-id params]
-                                                        (is (= service-id in-service-id))
-                                                        (is (= instance-id in-instance-id))
-                                                        (is (= {:force false, :scale true} params))
-                                                        successful-kill-result)]
-            (is (= successful-kill-result (scheduler/kill-instance kubernetes-scheduler {:id instance-id, :service-id service-id})))
-            (is (= {} @service-id->kill-info-store)))))
-
-      (testing "failed-kill"
-        (let [service-id->kill-info-store (atom {})
-              kubernetes-scheduler (make-kubernetes-scheduler service-id->kill-info-store 1000)]
-          (with-redefs [process-kill-instance-request (fn [_ in-service-id in-instance-id params]
-                                                        (is (= service-id in-service-id))
-                                                        (is (= instance-id in-instance-id))
-                                                        (is (= {:force false, :scale true} params))
-                                                        failed-kill-result)]
-            (is (= failed-kill-result (scheduler/kill-instance kubernetes-scheduler {:id instance-id, :service-id service-id})))
-            (is (= {service-id {:kill-failing-since current-time}} @service-id->kill-info-store)))))
-
-      (testing "not-yet-forced"
-        (let [service-id->kill-info-store (atom {service-id {:kill-failing-since (t/minus current-time (t/millis 500))}})
-              kubernetes-scheduler (make-kubernetes-scheduler service-id->kill-info-store 1000)]
-          (with-redefs [process-kill-instance-request (fn [_ in-service-id in-instance-id params]
-                                                        (is (= service-id in-service-id))
-                                                        (is (= instance-id in-instance-id))
-                                                        (is (= {:force false, :scale true} params))
-                                                        failed-kill-result)]
-            (is (= failed-kill-result (scheduler/kill-instance kubernetes-scheduler {:id instance-id, :service-id service-id})))
-            (is (= {service-id {:kill-failing-since (t/minus current-time (t/millis 500))}} @service-id->kill-info-store)))))
-
-      (testing "forced-kill"
-        (let [service-id->kill-info-store (atom {service-id {:kill-failing-since (t/minus current-time (t/millis 1500))}})
-              kubernetes-scheduler (make-kubernetes-scheduler service-id->kill-info-store 1000)]
-          (with-redefs [process-kill-instance-request (fn [_ in-service-id in-instance-id params]
-                                                        (is (= service-id in-service-id))
-                                                        (is (= instance-id in-instance-id))
-                                                        (is (= {:force true, :scale true} params))
-                                                        successful-kill-result)]
-            (is (= successful-kill-result (scheduler/kill-instance kubernetes-scheduler {:id instance-id, :service-id service-id})))
-            (is (= {} @service-id->kill-info-store))))))))
-
-(deftest test-service-id->state
-  (let [service-id "service-id"
-        kubernetes-scheduler (->MarathonScheduler {} {} (constantly nil) "/home/path/"
-                                                  (atom {service-id [:failed-instances]})
-                                                  (atom {service-id :kill-call-info})
-                                                  (constantly nil) 100 (constantly true))
-        state (scheduler/service-id->state kubernetes-scheduler service-id)]
-    (is (= {:failed-instances [:failed-instances], :killed-instances [], :kill-info :kill-call-info} state))))
-
 (deftest test-killed-instances-transient-store
   (let [current-time (t/now)
         current-time-str (du/date-to-str current-time)
         kubernetes-api (Object.)
-        kubernetes-scheduler (->MarathonScheduler kubernetes-api {} (constantly nil) "/home/path/"
-                                                  (atom {}) (atom {}) (constantly nil) 60000 (constantly true))
-        make-instance (fn [service-id instance-id]
-                        {:id instance-id
-                         :service-id service-id})]
-    (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api service-id instance-id scale-value force-value]
-                                         (is (= kubernetes-api in-kubernetes-api))
-                                         (is (= [scale-value force-value] [true false]))
-                                         {:service-id service-id, :instance-id instance-id, :killed? true, :deploymentId "12982340972"})
-                  t/now (fn [] current-time)]
+        dummy-scheduler (make-dummy-scheduler ["service-1" "service-2" "service-3"])
+        make-instance (fn [service-id instance-suffix]
+                        (let [instance-id (str service-id \. instance-suffix)]
+                          {:id instance-id
+                           :namespace (-> dummy-scheduler
+                                          :service-id->service-description-fn
+                                          (get service-id)
+                                          (get "run-as-user"))
+                           :pod-name (str instance-id "-0")
+                           :service-id service-id}))
+        make-killed-instance (fn [service-id instance-suffix]
+                               (assoc (make-instance service-id instance-suffix)
+                                      :killed-at current-time-str))]
+    (with-redefs [api-request (constantly {:status "OK"})
+                  service-id->service (fn service-id->dummy-service [_ service-id]
+                                        (scheduler/make-Service
+                                          {:id service-id :instances 1 :namespace "myself"}))
+                  t/now (constantly current-time)]
       (testing "tracking-instance-killed"
 
         (scheduler/preserve-only-killed-instances-for-services! [])
 
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-1" "service-1.A"))))
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-2" "service-2.A"))))
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-1" "service-1.C"))))
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-1" "service-1.B"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-1" "A"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-2" "A"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-1" "C"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-1" "B"))))
 
-        (is (= [{:id "service-1.A", :service-id "service-1", :killed-at current-time-str}
-                {:id "service-1.B", :service-id "service-1", :killed-at current-time-str}
-                {:id "service-1.C", :service-id "service-1", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-1" "A")
+                (make-killed-instance "service-1" "B")
+                (make-killed-instance "service-1" "C")]
                (scheduler/service-id->killed-instances "service-1")))
-        (is (= [{:id "service-2.A" :service-id "service-2", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-2" "A")]
                (scheduler/service-id->killed-instances "service-2")))
         (is (= [] (scheduler/service-id->killed-instances "service-3")))
 
         (scheduler/remove-killed-instances-for-service! "service-1")
         (is (= [] (scheduler/service-id->killed-instances "service-1")))
-        (is (= [{:id "service-2.A" :service-id "service-2", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-2" "A")]
                (scheduler/service-id->killed-instances "service-2")))
         (is (= [] (scheduler/service-id->killed-instances "service-3")))
 
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-3" "service-3.A"))))
-        (is (:killed? (scheduler/kill-instance kubernetes-scheduler (make-instance "service-3" "service-3.B"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-3" "A"))))
+        (is (:killed? (scheduler/kill-instance dummy-scheduler (make-instance "service-3" "B"))))
         (is (= [] (scheduler/service-id->killed-instances "service-1")))
-        (is (= [{:id "service-2.A" :service-id "service-2", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-2" "A")]
                (scheduler/service-id->killed-instances "service-2")))
-        (is (= [{:id "service-3.A", :service-id "service-3", :killed-at current-time-str}
-                {:id "service-3.B", :service-id "service-3", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-3" "A")
+                (make-killed-instance "service-3" "B")]
                (scheduler/service-id->killed-instances "service-3")))
 
         (scheduler/remove-killed-instances-for-service! "service-2")
         (is (= [] (scheduler/service-id->killed-instances "service-1")))
         (is (= [] (scheduler/service-id->killed-instances "service-2")))
-        (is (= [{:id "service-3.A", :service-id "service-3", :killed-at current-time-str}
-                {:id "service-3.B", :service-id "service-3", :killed-at current-time-str}]
+        (is (= [(make-killed-instance "service-3" "A")
+                (make-killed-instance "service-3" "B")]
                (scheduler/service-id->killed-instances "service-3")))
 
         (scheduler/preserve-only-killed-instances-for-services! [])
         (is (= [] (scheduler/service-id->killed-instances "service-1")))
         (is (= [] (scheduler/service-id->killed-instances "service-2")))
         (is (= [] (scheduler/service-id->killed-instances "service-3")))))))
+
+(comment "Disabled tests"
 
 (deftest test-max-failed-instances-cache
   (let [current-time (t/now)
