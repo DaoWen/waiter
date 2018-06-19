@@ -19,7 +19,7 @@
             [clojure.tools.logging :as log]
             [plumbing.core :as pc]
             [slingshot.slingshot :as ss]
-            [waiter.util.http-utils :as http-utils] ;; XXX - rename/refactor the mesos.utils namespace
+            [waiter.util.http-utils :as http-utils]
             [waiter.scheduler :as scheduler]
             [waiter.service-description :as sd]
             [waiter.util.date-utils :as du]
