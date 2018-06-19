@@ -25,12 +25,16 @@
   (:import waiter.scheduler.kubernetes.KubernetesScheduler
            (waiter.scheduler Service ServiceInstance)))
 
+(def ^:const default-rs-spec-path "./specs/k8s-default-pod.edn")
+
 (defn- make-dummy-scheduler
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
    (->
      {:max-conflict-retries 5
       :max-name-length 63
+      :rs-spec-file-path default-rs-spec-path
+      :pod-base-port 8080
       :service-id->failed-instances-transient-store (atom {})
       :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
                                                             service-ids)}
@@ -675,6 +679,44 @@
         (is (= [] (scheduler/service-id->killed-instances "service-2")))
         (is (= [] (scheduler/service-id->killed-instances "service-3")))))))
 
+(deftest test-create-app
+  ;(create-app-if-new [this service-id->password-fn descriptor]
+  (let [service-id "test-service-id"
+        service {:service-id service-id}
+        service-id->password-fn (constantly "password")
+        descriptor {:service-id service-id
+                    :service-description {"backend-proto" "HTTP"
+                                          "cmd" "foo"
+                                          "cpus" 1.2
+                                          "grace-period-secs" 7
+                                          "health-check-interval-secs" 10
+                                          "health-check-max-consecutive-failures" 2
+                                          "mem" 1024
+                                          "min-instances" 1
+                                          "ports" 2
+                                          "run-as-user" "myself"}}
+        dummy-scheduler (make-dummy-scheduler [service-id])]
+    (testing "unsuccessful-create: app already exists"
+      (let [actual (with-redefs [service-id->service (constantly service)]
+                     (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+        (is (nil? actual))))
+    (with-redefs [service-id->service (constantly nil)]
+      (testing "unsuccessful-create: service creation conflict (already running)"
+        (let [actual (with-redefs [api-request (fn mocked-api-request [& _]
+                                                 (ss/throw+ {:status 409}))]
+                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+        (is (nil? actual))))
+      (testing "unsuccessful-create: internal error"
+        (let [actual (with-redefs [api-request (fn mocked-api-request [& _]
+                                                   (throw (RuntimeException. "???")))]
+                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+          (is (nil? actual))))
+      (testing "successful create"
+        (let [actual (with-redefs [api-request (constantly service)
+                                   replicaset->Service identity]
+                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+          (is (= service actual)))))))
+
 (deftest test-delete-app
   (let [service-id "test-service-id"
         service (scheduler/make-Service {:id service-id :instances 1 :k8s-name service-id :namespace "myself"})
@@ -721,7 +763,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url nil})))
       (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
@@ -729,7 +771,7 @@
                                                     :max-conflict-retries 5
                                                     :max-name-length 63
                                                     :pod-base-port 8080
-                                                    :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                    :rs-spec-file-path default-rs-spec-path
                                                     :url ""})))
       (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
@@ -737,7 +779,7 @@
                                                     :max-conflict-retries 5
                                                     :max-name-length 63
                                                     :pod-base-port 8080
-                                                    :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                    :rs-spec-file-path default-rs-spec-path
                                                     :url "localhost"}))))
       (testing "bad http options"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -746,7 +788,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -754,7 +796,7 @@
                                                       :max-conflict-retries -1
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad max conflict retries"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -763,7 +805,7 @@
                                                       :max-conflict-retries -1
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad max name length"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -772,7 +814,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 0
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad ReplicaSet spec path"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -806,7 +848,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 80
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -814,7 +856,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 50000
-                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :rs-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))))
 
     (testing "should work with valid configuration"
@@ -825,5 +867,5 @@
                                             :max-conflict-retries 0
                                             :max-name-length 20
                                             :pod-base-port 1234
-                                            :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                            :rs-spec-file-path default-rs-spec-path
                                             :url "http://127.0.0.1:8001"}))))))
