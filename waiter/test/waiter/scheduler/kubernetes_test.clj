@@ -257,6 +257,9 @@
                                 (->> (scheduler/get-instances dummy-scheduler service-id)
                                      sanitize-k8s-service-records))]
           (is (= expected-response actual-response) (str name))
+          (is (= (-> expected-response :failed-instances count)
+                 (-> dummy-scheduler :service-id->failed-instances-transient-store deref count)
+                 (str name)))
           (scheduler/preserve-only-killed-instances-for-services! []))))))
 
 (deftest test-scheduler-get-apps
