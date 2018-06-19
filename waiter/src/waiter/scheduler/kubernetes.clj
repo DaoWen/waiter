@@ -13,6 +13,7 @@
             [clojure.core.async :as async]
             [clojure.data.json :as json]
             [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as string]
             [clojure.tools.logging :as log]
@@ -281,7 +282,7 @@
                   "from" instances "to" instances')
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
-          (< attempt max-conflict-retries)
+          (<= attempt max-conflict-retries)
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- scale-service-by-delta
@@ -298,7 +299,7 @@
       (let [instances' (+ instances instances-delta)]
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
-          (< attempt max-conflict-retries)
+          (<= attempt max-conflict-retries)
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- kill-service-instance
@@ -410,7 +411,7 @@
             :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
       (api-request http-client pod-url :request-method :delete))
     (api-request http-client replicaset-url :request-method :delete)
-    {:message (str "K8s deleted ReplicaSet " (:k8s-name service))
+    {:message (str "Kubernetes deleted ReplicaSet for " (:k8s-name service))
      :result :deleted}))
 
 (defn service-id->service
@@ -509,8 +510,7 @@
             delete-result (delete-service this service)]
         (swap! service-id->failed-instances-transient-store dissoc service-id)
         (scheduler/remove-killed-instances-for-service! service-id)
-        {:result :deleted
-         :message (str "Kubernetes deleted " service-id)})
+        delete-result)
       (catch [:status 404] _
         (log/warn "[delete-app] Service does not exist:" service-id)
         {:result :no-such-service-exists
@@ -519,7 +519,12 @@
         (log/warn "Kubernetes ReplicaSet conflict while deleting"
                   {:service-id service-id})
         {:result :conflict
-         :message "Kubernetes ReplicaSet conflict while deleting"})))
+         :message "Kubernetes ReplicaSet conflict while deleting"})
+      (catch Throwable e
+        (log/warn "Kubernetes ReplicaSet conflict while deleting"
+                  {:service-id service-id})
+        {:result :error
+         :message "Internal error while deleting service"})))
 
   (scale-app [this service-id scale-to-instances]
     (ss/try+
@@ -572,12 +577,16 @@
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
-  [{:keys [authentication http-options force-kill-after-ms framework-id-ttl
-           max-conflict-retries max-name-length pod-base-port rs-spec-file-path
-           service-id->service-description-fn url]}]
-  {:pre [(utils/pos-int? framework-id-ttl)
+  [{:keys [authentication http-options max-conflict-retries max-name-length
+           pod-base-port rs-spec-file-path service-id->service-description-fn url]}]
+  {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
-         (utils/pos-int? (:socket-timeout http-options))]}
+         (utils/non-neg-int? max-conflict-retries)
+         (utils/pos-int? max-name-length)
+         (integer? pod-base-port)
+         (<= 1024 pod-base-port 49151)  ; registered port range
+         (.exists (io/as-file rs-spec-file-path))
+         (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
         service-id->failed-instances-transient-store (atom {})]
     (when authentication
