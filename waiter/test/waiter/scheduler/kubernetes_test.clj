@@ -675,197 +675,155 @@
         (is (= [] (scheduler/service-id->killed-instances "service-2")))
         (is (= [] (scheduler/service-id->killed-instances "service-3")))))))
 
-(comment "Disabled tests"
-
-(deftest test-max-failed-instances-cache
-  (let [current-time (t/now)
-        current-time-str (du/date-to-str current-time k8s-timestamp-format)
-        service-id->failed-instances-transient-store (atom {})
-        common-extractor-fn (constantly {:service-id "service-1"})]
-    (testing "test-max-failed-instances-cache"
-      (preserve-only-failed-instances-for-services! service-id->failed-instances-transient-store [])
-      (doseq [n (range 10 50)]
-        (parse-and-store-failed-instance!
-          service-id->failed-instances-transient-store
-          "service-1"
-          {:taskId (str "service-1." n)
-           :timestamp current-time-str}
-          common-extractor-fn))
-      (let [actual-failed-instances (set (service-id->failed-instances service-id->failed-instances-transient-store "service-1"))]
-        (is (= 10 (count actual-failed-instances)))
-        (doseq [n (range 40 50)]
-          (is (contains? actual-failed-instances
-                         (scheduler/make-ServiceInstance
-                           {:id (str "service-1." n)
-                            :service-id "service-1"
-                            :started-at (du/str-to-date current-time-str k8s-timestamp-format)
-                            :healthy? false
-                            :port 0}))
-              (str "Failed instances does not contain instance service-1." n)))))))
+(deftest test-delete-app
+  (let [service-id "test-service-id"
+        service (scheduler/make-Service {:id service-id :instances 1 :k8s-name service-id :namespace "myself"})
+        dummy-scheduler (make-dummy-scheduler [service-id])]
+    (with-redefs [service-id->service (constantly service)]
+      (testing "successful-delete"
+        (let [actual (with-redefs [api-request (constantly {:status "OK"})]
+                       (scheduler/delete-app dummy-scheduler service-id))]
+          (is (= {:message (str "Kubernetes deleted ReplicaSet for " service-id)
+                  :result :deleted}
+                 actual))))
+      (testing "unsuccessful-delete: service not found"
+        (let [actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
+                                                 (when (= request-method :delete)
+                                                   (ss/throw+ {:status 404})))]
+                       (scheduler/delete-app dummy-scheduler service-id))]
+          (is (= {:message "Kubernetes reports service does not exist"
+                  :result :no-such-service-exists}
+                 actual))))
+      (testing "unsuccessful-delete: patch conflict"
+        (let [actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
+                                                 (if (= request-method :patch)
+                                                   (ss/throw+ {:status 409})
+                                                   {:spec {:replicas 1}}))]
+                       (scheduler/delete-app dummy-scheduler service-id))]
+          (is (= {:message "Kubernetes ReplicaSet conflict while deleting"
+                  :result :conflict}
+                 actual))))
+      (testing "unsuccessful-delete: internal error"
+        (let [actual (with-redefs [api-request (fn [& _] (throw (RuntimeException.)))]
+                       (scheduler/delete-app dummy-scheduler service-id))]
+          (is (= {:message "Internal error while deleting service"
+                  :result :error}
+                 actual)))))))
 
 (deftest test-kubernetes-scheduler
-  (testing "Creating a MarathonScheduler"
+  (testing "Creating a KubernetesScheduler"
 
     (testing "should throw on invalid configuration"
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 900000
-                                                    :home-path-prefix "/home/"
+      (testing "bad url"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url nil})))
+      (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
                                                                    :socket-timeout 10000}
-                                                    :mesos-slave-port 5051
-                                                    :slave-directory "/foo"
-                                                    :url nil})))
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 900000
-                                                    :home-path-prefix "/home/"
+                                                    :max-conflict-retries 5
+                                                    :max-name-length 63
+                                                    :pod-base-port 8080
+                                                    :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                    :url ""})))
+      (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
                                                                    :socket-timeout 10000}
-                                                    :mesos-slave-port 5051
-                                                    :slave-directory ""
-                                                    :url "url"})))
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 900000
-                                                    :home-path-prefix "/home/"
-                                                    :http-options {:conn-timeout 10000
-                                                                   :socket-timeout 10000}
-                                                    :mesos-slave-port 0
-                                                    :slave-directory "/foo"
-                                                    :url "url"})))
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 900000
-                                                    :home-path-prefix "/home/"
-                                                    :http-options {}
-                                                    :mesos-slave-port 5051
-                                                    :slave-directory "/foo"
-                                                    :url "url"})))
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 900000
-                                                    :home-path-prefix nil
-                                                    :http-options {:conn-timeout 10000
-                                                                   :socket-timeout 10000}
-                                                    :mesos-slave-port 5051
-                                                    :slave-directory "/foo"
-                                                    :url "url"})))
-      (is (thrown? Throwable (kubernetes-scheduler {:framework-id-ttl 0
-                                                    :home-path-prefix "/home/"
-                                                    :http-options {:conn-timeout 10000
-                                                                   :socket-timeout 10000}
-                                                    :mesos-slave-port 5051
-                                                    :slave-directory "/foo"
-                                                    :url "url"}))))
+                                                    :max-conflict-retries 5
+                                                    :max-name-length 63
+                                                    :pod-base-port 8080
+                                                    :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                    :url "localhost"}))))
+      (testing "bad http options"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 0
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"})))
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 0}
+                                                      :max-conflict-retries -1
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"}))))
+      (testing "bad max conflict retries"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries -1
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"}))))
+      (testing "bad max name length"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 0
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"}))))
+      (testing "bad ReplicaSet spec path"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path nil
+                                                      :url "http://127.0.0.1:8001"})))
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path ""
+                                                      :url "http://127.0.0.1:8001"})))
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 8080
+                                                      :rs-spec-file-path "/does/not/exist.edn"
+                                                      :url "http://127.0.0.1:8001"}))))
+      (testing "bad base port number"
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 80
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"})))
+        (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
+                                                      :http-options {:conn-timeout 10000
+                                                                     :socket-timeout 10000}
+                                                      :max-conflict-retries 5
+                                                      :max-name-length 63
+                                                      :pod-base-port 50000
+                                                      :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                                      :url "http://127.0.0.1:8001"})))))
 
     (testing "should work with valid configuration"
-      (is (instance? MarathonScheduler
-                     (kubernetes-scheduler {:home-path-prefix "/home/"
+      (is (instance? KubernetesScheduler
+                     (kubernetes-scheduler {:authentication nil
                                             :http-options {:conn-timeout 10000
                                                            :socket-timeout 10000}
-                                            :force-kill-after-ms 60000
-                                            :framework-id-ttl 900000
-                                            :url "url"}))))))
-
-(deftest test-process-kill-instance-request
-  (let [kubernetes-api (Object.)
-        service-id "test-service-id"
-        instance-id "instance-id"]
-    (testing "successful-delete"
-      (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api in-service-id in-instance-id scale-value force-value]
-                                           (is (= kubernetes-api in-kubernetes-api))
-                                           (is (= service-id in-service-id))
-                                           (is (= instance-id in-instance-id))
-                                           (is (= [scale-value force-value] [true false]))
-                                           {:deploymentId "12982340972"})]
-        (is (= {:instance-id instance-id :killed? true :message "Successfully killed instance" :service-id service-id, :status 200}
-               (process-kill-instance-request kubernetes-api service-id instance-id {})))))
-
-    (testing "unsuccessful-delete"
-      (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api in-service-id in-instance-id scale-value force-value]
-                                           (is (= kubernetes-api in-kubernetes-api))
-                                           (is (= service-id in-service-id))
-                                           (is (= instance-id in-instance-id))
-                                           (is (= [scale-value force-value] [true false]))
-                                           {:failed true})]
-        (is (= {:instance-id instance-id :killed? false :message "Unable to kill instance" :service-id service-id, :status 500}
-               (process-kill-instance-request kubernetes-api service-id instance-id {})))))
-
-    (testing "deployment-conflict"
-      (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api in-service-id in-instance-id scale-value force-value]
-                                           (is (= kubernetes-api in-kubernetes-api))
-                                           (is (= service-id in-service-id))
-                                           (is (= instance-id in-instance-id))
-                                           (is (= [scale-value force-value] [true false]))
-                                           (ss/throw+ {:status 409}))]
-        (is (= {:instance-id instance-id :killed? false :message "Locked by one or more deployments" :service-id service-id, :status 409}
-               (process-kill-instance-request kubernetes-api service-id instance-id {})))))
-
-    (testing "kubernetes-404"
-      (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api in-service-id in-instance-id scale-value force-value]
-                                           (is (= kubernetes-api in-kubernetes-api))
-                                           (is (= service-id in-service-id))
-                                           (is (= instance-id in-instance-id))
-                                           (is (= [scale-value force-value] [true false]))
-                                           (ss/throw+ {:body "Not Found", :status 404}))]
-        (is (= {:instance-id instance-id :killed? false :message "Not Found" :service-id service-id, :status 404}
-               (process-kill-instance-request kubernetes-api service-id instance-id {})))))
-
-    (testing "exception-while-killing"
-      (with-redefs [kubernetes/kill-task (fn [in-kubernetes-api in-service-id in-instance-id scale-value force-value]
-                                           (is (= kubernetes-api in-kubernetes-api))
-                                           (is (= service-id in-service-id))
-                                           (is (= instance-id in-instance-id))
-                                           (is (= [scale-value force-value] [true false]))
-                                           (throw (Exception. "exception from test")))]
-        (is (= {:instance-id instance-id :killed? false :message "exception from test" :service-id service-id, :status 500}
-               (process-kill-instance-request kubernetes-api service-id instance-id {})))))))
-
-(deftest test-delete-app
-  (let [scheduler (->MarathonScheduler {} {} nil nil (atom {}) (atom {}) (constantly nil) nil nil)]
-
-    (with-redefs [kubernetes/delete-app (constantly {:deploymentId 12345})]
-      (is (= {:result :deleted
-              :message "Marathon deleted with deploymentId 12345"}
-             (scheduler/delete-app scheduler "foo"))))
-
-    (with-redefs [kubernetes/delete-app (constantly {})]
-      (is (= {:result :error
-              :message "Marathon did not provide deploymentId for delete request"}
-             (scheduler/delete-app scheduler "foo"))))
-
-    (with-redefs [kubernetes/delete-app (fn [_ _] (ss/throw+ {:status 404}))]
-      (is (= {:result :no-such-service-exists
-              :message "Marathon reports service does not exist"}
-             (scheduler/delete-app scheduler "foo"))))))
-
-(deftest test-extract-deployment-info
-  (let [kubernetes-api (Object.)
-        prepare-response (fn [body]
-                           (let [body-chan (async/promise-chan)]
-                             (async/>!! body-chan body)
-                             {:body body-chan}))]
-    (with-redefs [kubernetes/get-deployments (constantly [{"affectedApps" "waiter-app-1234", "id" "1234", "version" "v1234"}
-                                                          {"affectedApps" "waiter-app-4567", "id" "4567", "version" "v4567"}
-                                                          {"affectedApps" "waiter-app-3829", "id" "3829", "version" "v3829"}
-                                                          {"affectedApps" "waiter-app-4321", "id" "4321", "version" "v4321"}])]
-      (testing "no deployments entry"
-        (let [response (prepare-response "{\"message\": \"App is locked by one or more deployments.\"}")]
-          (is (not (extract-deployment-info kubernetes-api response)))))
-
-      (testing "no deployments listed"
-        (let [response (prepare-response "{\"deployments\": [],
-                                         \"message\": \"App is locked by one or more deployments.\"}")]
-          (is (not (extract-deployment-info kubernetes-api response)))))
-
-      (testing "single deployment"
-        (let [response (prepare-response "{\"deployments\": [{\"id\":\"1234\"}],
-                                         \"message\": \"App is locked by one or more deployments.\"}")]
-          (is (= [{"affectedApps" "waiter-app-1234", "id" "1234", "version" "v1234"}]
-                 (extract-deployment-info kubernetes-api response)))))
-
-      (testing "multiple deployments"
-        (let [response {:body "{\"deployments\": [{\"id\":\"1234\"}, {\"id\":\"3829\"}],
-                              \"message\": \"App is locked by one or more deployments.\"}"}]
-          (is (= [{"affectedApps" "waiter-app-1234", "id" "1234", "version" "v1234"}
-                  {"affectedApps" "waiter-app-3829", "id" "3829", "version" "v3829"}]
-                 (extract-deployment-info kubernetes-api response)))))
-
-      (testing "multiple deployments, one without info"
-        (let [response (prepare-response "{\"deployments\": [{\"id\":\"1234\"}, {\"id\":\"3829\"}, {\"id\":\"9876\"}],
-                                         \"message\": \"App is locked by one or more deployments.\"}")]
-          (is (= [{"affectedApps" "waiter-app-1234", "id" "1234", "version" "v1234"}
-                  {"affectedApps" "waiter-app-3829", "id" "3829", "version" "v3829"}]
-                 (extract-deployment-info kubernetes-api response))))))))
-)
+                                            :max-conflict-retries 0
+                                            :max-name-length 20
+                                            :pod-base-port 1234
+                                            :rs-spec-file-path "./specs/k8s-default-pod.edn"
+                                            :url "http://127.0.0.1:8001"}))))))

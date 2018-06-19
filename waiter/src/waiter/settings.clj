@@ -272,8 +272,6 @@
                       :kubernetes {:factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}
-                                   :force-kill-after-ms 60000
-                                   :framework-id-ttl 900000
                                    :max-conflict-retries 5
                                    :max-name-length 63
                                    :pod-base-port 8080}
