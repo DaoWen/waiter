@@ -501,8 +501,11 @@
           (catch [:status 409] e
             (log/warn (ex-info "Conflict status when trying to start app. Is app starting up?"
                                {:descriptor descriptor
-                                :error e})
-                      "Exception starting new app"))))))
+                                :error e})))
+          (catch Throwable e
+            (log/error (ex-info "Error starting new app."
+                                {:descriptor descriptor
+                                 :error e})))))))
 
   (delete-app [this service-id]
     (ss/try+
