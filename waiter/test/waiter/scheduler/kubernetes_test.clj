@@ -27,6 +27,14 @@
 
 (def ^:const default-rs-spec-path "./specs/k8s-default-pod.edn")
 
+(defmacro throw-exception
+  "Throw a RuntimeException with the stack trace suppressed.
+   Suppressing the stack trace helps keep our test logs cleaner."
+  []
+  `(throw
+     (doto (RuntimeException.)
+       (.setStackTrace (make-array StackTraceElement 0)))))
+
 (defn- make-dummy-scheduler
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
@@ -571,10 +579,10 @@
                  actual))))
       (testing "unsuccessful-delete: internal error"
         (let [error-msg "Unable to kill instance"
-              actual (with-redefs [api-request (fn [& _] (throw (RuntimeException. error-msg)))]
+              actual (with-redefs [api-request (fn [& _] (throw-exception))]
                        (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
-                        :message error-msg
+                        :message "Error while killing instance"
                         :status 500)
                  actual)))))))
 
@@ -708,7 +716,7 @@
         (is (nil? actual))))
       (testing "unsuccessful-create: internal error"
         (let [actual (with-redefs [api-request (fn mocked-api-request [& _]
-                                                   (throw (RuntimeException. "???")))]
+                                                   (throw-exception))]
                        (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
           (is (nil? actual))))
       (testing "successful create"
@@ -746,10 +754,52 @@
                   :result :conflict}
                  actual))))
       (testing "unsuccessful-delete: internal error"
-        (let [actual (with-redefs [api-request (fn [& _] (throw (RuntimeException.)))]
+        (let [actual (with-redefs [api-request (fn [& _] (throw-exception))]
                        (scheduler/delete-app dummy-scheduler service-id))]
           (is (= {:message "Internal error while deleting service"
                   :result :error}
+                 actual)))))))
+
+(deftest test-scale-app
+  (let [instances' 4
+        service-id "test-service-id"
+        service (scheduler/make-Service {:id service-id :instances 1 :k8s-name service-id :namespace "myself"})
+        dummy-scheduler (make-dummy-scheduler [service-id])]
+    (with-redefs [service-id->service (constantly service)]
+      (testing "successful-scale"
+        (let [actual (with-redefs [api-request (constantly {:status "OK"})]
+                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+          (is (= {:success true
+                  :status 200
+                  :result :scaled
+                  :message (str "Scaled to " instances')}
+                 actual))))
+      (testing "unsuccessful-scale: service not found"
+        (let [actual (with-redefs [service-id->service (constantly nil)]
+                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+          (is (= {:success false
+                  :status 404
+                  :result :no-such-service-exists
+                  :message "Failed to scale missing service"}
+                 actual))))
+      (testing "unsuccessful-scale: patch conflict"
+        (let [actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
+                                                 (if (= request-method :patch)
+                                                   (ss/throw+ {:status 409})
+                                                   {:spec {:replicas 1}}))]
+                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+          (is (= {:success false
+                  :status 409
+                  :result :conflict
+                  :message "Scaling failed due to repeated patch conflicts"}
+                 actual))))
+      (testing "unsuccessful-scale: internal error"
+        (let [actual (with-redefs [api-request (fn [& _] (throw-exception))]
+                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+          (is (= {:success false
+                  :status 500
+                  :result :failed
+                  :message "Error while scaling waiter service"}
                  actual)))))))
 
 (deftest test-kubernetes-scheduler
