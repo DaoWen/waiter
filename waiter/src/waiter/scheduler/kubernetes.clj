@@ -486,7 +486,7 @@
       (catch Throwable e
         {:instance-id id
          :killed? false
-         :message (.getMessage e)
+         :message "Error while killing instance"
          :service-id service-id
          :status 500})))
 
@@ -498,14 +498,11 @@
       (when-not (scheduler/app-exists? this service-id)
         (ss/try+
           (create-service service-id descriptor this service-id->password-fn)
-          (catch [:status 409] e
-            (log/warn (ex-info "Conflict status when trying to start app. Is app starting up?"
-                               {:descriptor descriptor
-                                :error e})))
+          (catch [:status 409] _
+            (log/error "Conflict status when trying to start app. Is app starting up?"
+                       descriptor))
           (catch Throwable e
-            (log/error (ex-info "Error starting new app."
-                                {:descriptor descriptor
-                                 :error e})))))))
+            (log/error e "Error starting new app." descriptor))))))
 
   (delete-app [this service-id]
     (ss/try+
@@ -518,7 +515,7 @@
         (log/warn "[delete-app] Service does not exist:" service-id)
         {:result :no-such-service-exists
          :message "Kubernetes reports service does not exist"})
-      (catch [:status 409] e
+      (catch [:status 409] _
         (log/warn "Kubernetes ReplicaSet conflict while deleting"
                   {:service-id service-id})
         {:result :conflict
@@ -531,15 +528,20 @@
 
   (scale-app [this service-id scale-to-instances]
     (ss/try+
-      (scale-service-up-to
-        this
-        (service-id->service this service-id)
-        scale-to-instances)
-      {:success true
-       :status 200
-       :result :scaled
-       :message (str "Scaled to " scale-to-instances)}
-      (catch [:status 409] e
+      (if-let [service (service-id->service this service-id)]
+        (do
+          (scale-service-up-to this service scale-to-instances)
+          {:success true
+           :status 200
+           :result :scaled
+           :message (str "Scaled to " scale-to-instances)})
+        (do
+          (log/error "Cannot scale missing service" service-id)
+          {:success false
+           :status 404
+           :result :no-such-service-exists
+           :message "Failed to scale missing service"}))
+      (catch [:status 409] _
         {:success false
          :status 409
          :result :conflict
@@ -549,7 +551,7 @@
         {:success false
          :status 500
          :result :failed
-         :message (str "Scaling failed: " (.getMessage e))})))
+         :message "Error while scaling waiter service"})))
 
   (retrieve-directory-content [_ service-id instance-id _ relative-directory]
     ;; TODO (#357) - get access to the working directory contents in the pod
