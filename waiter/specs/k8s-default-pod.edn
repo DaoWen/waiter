@@ -3,16 +3,16 @@
  :metadata {:name #waiter/param :k8s-name
             :labels {:app #waiter/param :k8s-name
                      :managed-by "waiter"}
-            :annotations {:waiter/app-status "live"
-                          :waiter/service-id #waiter/param :service-id}}
+            :annotations {:waiter-app-status "live"
+                          :waiter-service-id #waiter/param :service-id}}
  :spec {:replicas #waiter/param :min-instances
         :selector {:matchLabels {:app #waiter/param :k8s-name
                                  :managed-by "waiter"}}
         :template {:metadata {:labels {:app #waiter/param :k8s-name
                                        :managed-by "waiter"}
-                              :annotations {:waiter/port-count #waiter/param-str :port-count
-                                            :waiter/protocol #waiter/param :backend-protocol
-                                            :waiter/service-id #waiter/param :service-id}}
+                              :annotations {:waiter-port-count #waiter/param-str :port-count
+                                            :waiter-protocol #waiter/param :backend-protocol
+                                            :waiter-service-id #waiter/param :service-id}}
                    :spec {:containers [{:name #waiter/param :k8s-name
                                         :command ["/bin/sh" "-c" #waiter/param :cmd]
                                         :env #waiter/param :env
