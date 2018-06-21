@@ -27,7 +27,7 @@
   (:import (org.joda.time.format DateTimeFormat)))
 
 (defmacro k8s-log
-  "Log Kuberenets-specific messages."
+  "Log Kubernetes-specific messages."
   [& args]
   `(log/log "Kubernetes" :debug nil (print-str ~@args)))
 
@@ -41,7 +41,7 @@
   (DateTimeFormat/forPattern "yyyy-MM-dd'T'HH:mm:ss'Z'"))
 
 (defn- timestamp-str->datetime
-  "Parse a Kuberentes API timestamp string."
+  "Parse a Kubernetes API timestamp string."
   [k8s-timestamp-str]
   (du/str-to-date k8s-timestamp-str k8s-timestamp-format))
 
@@ -52,7 +52,7 @@
   ;; If we have fewer than 48 characters, then we'll probably want to shorten the hash.
   (< k8s-max-name-length 48))
 
-;; Kuberentes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen.
+;; Kubernetes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen.
 (def ^:const pod-unique-suffix-length 5)
 
 (defn- service-id->k8s-name [{:keys [max-name-length] :as scheduler} service-id]
@@ -71,7 +71,7 @@
     (str app-prefix' suffix)))
 
 (pc/defnk replicaset->Service
-  "Convert a Kuberentes ReplicaSet JSON response into a Waiter Service record."
+  "Convert a Kubernetes ReplicaSet JSON response into a Waiter Service record."
   [spec
    [:metadata name namespace [:annotations waiter-service-id]]
    [:status {replicas 0} {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
@@ -107,7 +107,7 @@
        (= "Error" (:reason pod-terminated-info))))
 
 (defn- track-failed-instances!
-  "Update this KuberentesScheduler's service-id->failed-instances-transient-store
+  "Update this KubernetesScheduler's service-id->failed-instances-transient-store
    when a new pod failure is listed in the given pod's lastState container status."
   [{:keys [service-id] :as live-instance} {:keys [service-id->failed-instances-transient-store]} pod]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
@@ -130,7 +130,7 @@
                  update-in [service-id] assoc newest-failure-id newest-failure-instance))))))
 
 (defn- pod->ServiceInstance
-  "Convert a Kuberentes Pod JSON response into a Waiter Service Instance record."
+  "Convert a Kubernetes Pod JSON response into a Waiter Service Instance record."
   [pod]
   (try
     (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
@@ -156,7 +156,7 @@
       (comment "Returning nil on failure."))))
 
 (defn api-request
-  "Make an HTTP request to the Kuberenets API server using the configured authentication.
+  "Make an HTTP request to the Kubernetes API server using the configured authentication.
    If data is provided via :body, the application/json content type is added automatically.
    The response payload (if any) is automatically parsed to JSON."
   [client url & {:keys [body content-type request-method] :as options}]
@@ -181,7 +181,7 @@
   (get service-description "run-as-user"))
 
 (defn- get-services
-  "Get all Waiter Services (reified as ReplicaSets) running in this Kuberentes cluster."
+  "Get all Waiter Services (reified as ReplicaSets) running in this Kubernetes cluster."
   [{:keys [api-server-url http-client] :as scheduler}]
   (->>
     "/apis/extensions/v1beta1/replicasets?labelSelector=managed-by=waiter"
@@ -191,7 +191,7 @@
     (mapv replicaset->Service)))
 
 (defn- get-replicaset-pods
-  "Get all Kuberentes pods associated with the given Waiter Service's corresponding ReplicaSet."
+  "Get all Kubernetes pods associated with the given Waiter Service's corresponding ReplicaSet."
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} {:keys [k8s-name namespace]}]
   (->> (str api-server-url
             "/api/v1/namespaces/"
@@ -376,7 +376,7 @@
         (throw e)))))
 
 (defn- create-service
-  "Reify a Waiter Service as a Kuberentes ReplicaSet."
+  "Reify a Waiter Service as a Kubernetes ReplicaSet."
   [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec scheduler service-id service-description service-id->password-fn)
