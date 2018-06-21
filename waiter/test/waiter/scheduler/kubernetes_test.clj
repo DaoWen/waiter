@@ -22,8 +22,8 @@
             [waiter.scheduler.kubernetes :refer :all]
             [waiter.scheduler :as scheduler]
             [waiter.util.date-utils :as du])
-  (:import waiter.scheduler.kubernetes.KubernetesScheduler
-           (waiter.scheduler Service ServiceInstance)))
+  (:import (waiter.scheduler Service ServiceInstance)
+           (waiter.scheduler.kubernetes KubernetesScheduler)))
 
 (def ^:const default-rs-spec-path "./specs/k8s-default-pod.edn")
 
