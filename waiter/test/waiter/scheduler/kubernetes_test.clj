@@ -769,7 +769,7 @@
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-scale"
         (let [actual (with-redefs [api-request (constantly {:status "OK"})]
-                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+                       (scheduler/scale-app dummy-scheduler service-id instances' false))]
           (is (= {:success true
                   :status 200
                   :result :scaled
@@ -777,7 +777,7 @@
                  actual))))
       (testing "unsuccessful-scale: service not found"
         (let [actual (with-redefs [service-id->service (constantly nil)]
-                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+                       (scheduler/scale-app dummy-scheduler service-id instances' false))]
           (is (= {:success false
                   :status 404
                   :result :no-such-service-exists
@@ -788,7 +788,7 @@
                                                  (if (= request-method :patch)
                                                    (ss/throw+ {:status 409})
                                                    {:spec {:replicas 1}}))]
-                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+                       (scheduler/scale-app dummy-scheduler service-id instances' false))]
           (is (= {:success false
                   :status 409
                   :result :conflict
@@ -796,7 +796,7 @@
                  actual))))
       (testing "unsuccessful-scale: internal error"
         (let [actual (with-redefs [api-request (fn [& _] (throw-exception))]
-                       (scheduler/scale-app dummy-scheduler service-id instances'))]
+                       (scheduler/scale-app dummy-scheduler service-id instances' false))]
           (is (= {:success false
                   :status 500
                   :result :failed
