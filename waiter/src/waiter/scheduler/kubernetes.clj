@@ -342,7 +342,7 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [rs-spec-file-path pod-base-port] :as scheduler} service-id service-description service-id->password-fn]
+  [{:keys [replicaset-spec-file-path pod-base-port] :as scheduler} service-id service-description service-id->password-fn]
   (let [{:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
                 health-check-max-consecutive-failures mem min-instances ports run-as-user]} service-description
         home-path (str "/home/" run-as-user)
@@ -382,7 +382,7 @@
                             'waiter.fn/str #(apply str %)
                             'waiter.fn/upper-case string/upper-case}}]
     (try
-      (->> rs-spec-file-path slurp (edn/read-string edn-opts))
+      (->> replicaset-spec-file-path slurp (edn/read-string edn-opts))
       (catch Throwable e
         (log/error e "Error creating ReplicaSet specification for" service-id)
         (throw e)))))
@@ -451,7 +451,7 @@
                                 max-conflict-retries
                                 max-name-length
                                 pod-base-port
-                                rs-spec-file-path
+                                replicaset-spec-file-path
                                 service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
   scheduler/ServiceScheduler
@@ -587,14 +587,14 @@
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options max-conflict-retries max-name-length
-           pod-base-port rs-spec-file-path service-id->service-description-fn url]}]
+           pod-base-port replicaset-spec-file-path service-id->service-description-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
          (utils/non-neg-int? max-conflict-retries)
          (utils/pos-int? max-name-length)
          (integer? pod-base-port)
          (<= 1024 pod-base-port 49151)  ; registered port range
-         (.exists (io/as-file rs-spec-file-path))
+         (.exists (io/as-file replicaset-spec-file-path))
          (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
         service-id->failed-instances-transient-store (atom {})]
@@ -604,6 +604,6 @@
                            max-conflict-retries
                            max-name-length
                            pod-base-port
-                           rs-spec-file-path
+                           replicaset-spec-file-path
                            service-id->failed-instances-transient-store
                            service-id->service-description-fn)))

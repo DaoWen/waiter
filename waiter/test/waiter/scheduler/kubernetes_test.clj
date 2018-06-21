@@ -41,7 +41,7 @@
    (->
      {:max-conflict-retries 5
       :max-name-length 63
-      :rs-spec-file-path default-rs-spec-path
+      :replicaset-spec-file-path default-rs-spec-path
       :pod-base-port 8080
       :service-id->failed-instances-transient-store (atom {})
       :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
@@ -814,7 +814,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url nil})))
       (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
@@ -822,7 +822,7 @@
                                                     :max-conflict-retries 5
                                                     :max-name-length 63
                                                     :pod-base-port 8080
-                                                    :rs-spec-file-path default-rs-spec-path
+                                                    :replicaset-spec-file-path default-rs-spec-path
                                                     :url ""})))
       (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                     :http-options {:conn-timeout 10000
@@ -830,7 +830,7 @@
                                                     :max-conflict-retries 5
                                                     :max-name-length 63
                                                     :pod-base-port 8080
-                                                    :rs-spec-file-path default-rs-spec-path
+                                                    :replicaset-spec-file-path default-rs-spec-path
                                                     :url "localhost"}))))
       (testing "bad http options"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -839,7 +839,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -847,7 +847,7 @@
                                                       :max-conflict-retries -1
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad max conflict retries"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -856,7 +856,7 @@
                                                       :max-conflict-retries -1
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad max name length"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -865,7 +865,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 0
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad ReplicaSet spec path"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -874,7 +874,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path nil
+                                                      :replicaset-spec-file-path nil
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -882,7 +882,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path ""
+                                                      :replicaset-spec-file-path ""
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -890,7 +890,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 8080
-                                                      :rs-spec-file-path "/does/not/exist.edn"
+                                                      :replicaset-spec-file-path "/does/not/exist.edn"
                                                       :url "http://127.0.0.1:8001"}))))
       (testing "bad base port number"
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
@@ -899,7 +899,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 80
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))
         (is (thrown? Throwable (kubernetes-scheduler {:authentication nil
                                                       :http-options {:conn-timeout 10000
@@ -907,7 +907,7 @@
                                                       :max-conflict-retries 5
                                                       :max-name-length 63
                                                       :pod-base-port 50000
-                                                      :rs-spec-file-path default-rs-spec-path
+                                                      :replicaset-spec-file-path default-rs-spec-path
                                                       :url "http://127.0.0.1:8001"})))))
 
     (testing "should work with valid configuration"
@@ -918,5 +918,5 @@
                                             :max-conflict-retries 0
                                             :max-name-length 20
                                             :pod-base-port 1234
-                                            :rs-spec-file-path default-rs-spec-path
+                                            :replicaset-spec-file-path default-rs-spec-path
                                             :url "http://127.0.0.1:8001"}))))))
