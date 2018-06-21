@@ -566,7 +566,7 @@
                         :message error-msg
                         :status 404)
                  actual))))
-      (testing "unsuccessful-delete: patch conflict"
+      (testing "successful-delete: terminated, but had patch conflict"
         (let [error-msg "Failed to update service specification due to repeated conflicts"
               actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
                                                  (if (= request-method :patch)
@@ -574,8 +574,9 @@
                                                    {:spec {:replicas 1}}))]
                        (scheduler/kill-instance dummy-scheduler instance))]
           (is (= (assoc partial-expected
-                        :message error-msg
-                        :status 409)
+                        :killed? true
+                        :message "Successfully killed instance"
+                        :status 200)
                  actual))))
       (testing "unsuccessful-delete: internal error"
         (let [error-msg "Unable to kill instance"

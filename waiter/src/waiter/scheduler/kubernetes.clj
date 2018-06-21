@@ -211,18 +211,24 @@
        (api-request http-client)
        :items))
 
+(defn- live-pod?
+  "Returns true if the pod has started, but has not yet been deleted."
+  [pod]
+  (and (some? (get-in pod [:status :podIP]))
+       (nil? (get-in pod [:metadata :deletionTimestamp]))))
+
 (defn- get-service-instances
   "Get all Waiter Service Instances associated with the given Waiter Service."
   [{:keys [api-server-url http-client] :as scheduler} basic-service-info]
   (vec (for [pod (get-replicaset-pods scheduler basic-service-info)
-             :let [service-instance (pod->ServiceInstance pod)]
-             :when (:host service-instance)]
-         (doto service-instance
-           (track-failed-instances! scheduler pod)))))
+             :when (live-pod? pod)]
+         (let [service-instance (pod->ServiceInstance pod)]
+           (track-failed-instances! service-instance scheduler pod)
+           service-instance))))
 
 (defn instances-breakdown
   "Get all Waiter Service Instances associated with the given Waiter Service.
-   Grouped by liveness status, i.e.: {:active-instances [...] :failed-instances [...]}."
+   Grouped by liveness status, i.e.: {:active-instances [...] :failed-instances [...] :killed-instances [...]}"
   [{:keys [service-id->failed-instances-transient-store] :as scheduler} {service-id :id :as basic-service-info}]
   {:active-instances (get-service-instances scheduler basic-service-info)
    :failed-instances (-> @service-id->failed-instances-transient-store (get service-id []) vals vec)
@@ -258,13 +264,13 @@
   [patch-cmd retry-condition retry-cmd]
   `(let [patch-result# (ss/try+
                          ~patch-cmd
-                         (catch [:status 409] _#
-                           ::conflict))]
+                         (catch [:status 409] e#
+                           (with-meta ::conflict {:exception e#})))]
      (if (not= ::conflict patch-result#)
        patch-result#
        (if ~retry-condition
          ~retry-cmd
-         (ss/throw+ {:status 409})))))
+         (throw (-> patch-result# meta :exception))))))
 
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
@@ -304,7 +310,7 @@
 
 (defn- kill-service-instance
   "Safely kill the Kubernetes pod corresponding to the given Waiter Service Instance.
-   Returns 200 (OK) on success, but throws on failure."
+   Returns nil on success, but throws on failure."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id namespace pod-name service-id] :as instance} service]
   (let [pod-url (str api-server-url
                      "/api/v1/namespaces/"
@@ -320,12 +326,19 @@
     ; request termination of the instance
     (api-request http-client pod-url :request-method :delete :body term-json)
     ; scale down the replicaset to reflect removal of this instance
-    (scale-service-by-delta scheduler service -1)
+    (try
+      (scale-service-by-delta scheduler service -1)
+      (catch Throwable t
+        (log/error t "Error while scaling down ReplicaSet after pod termination")))
     ; force-kill the instance (should still be terminating)
-    (api-request http-client pod-url :request-method :delete :body kill-json)
-    ; report back that the instance was killed successfully
+    (try
+      (api-request http-client pod-url :request-method :delete :body kill-json)
+      (catch Throwable t
+        (log/error t "Error force-killing pod")))
+    ; report back that the instance was killed
     (scheduler/process-instance-killed! instance)
-    200))
+    (comment "Success! Even if the scale-down or force-kill operation failed,
+              the pod will be force-killed after the grace period is up.")))
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
@@ -386,9 +399,6 @@
         response-json (api-request http-client request-url
                                    :body (as-json spec-json)
                                    :request-method :post)]
-    (when-not (= "ReplicaSet" (:kind response-json))
-      (log/error "Invalid response from ReplicaSet create request"
-                 (as-json response-json)))
     (replicaset->Service response-json)))
 
 (defn- delete-service
@@ -464,25 +474,19 @@
 
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
-      (let [service (service-id->service this service-id)
-            kill-result-status (kill-service-instance this instance service)]
+      (let [service (service-id->service this service-id)]
+        (kill-service-instance this instance service)
         {:instance-id id
          :killed? true
          :message "Successfully killed instance"
          :service-id service-id
-         :status  kill-result-status})
+         :status 200})
       (catch [:status 404] e
         {:instance-id id
          :killed? false
          :message "Instance not found"
          :service-id service-id
          :status 404})
-      (catch [:status 409] e
-        {:instance-id id
-         :killed? false
-         :message "Failed to update service specification due to repeated conflicts"
-         :service-id service-id
-         :status 409})
       (catch Throwable e
         {:instance-id id
          :killed? false
