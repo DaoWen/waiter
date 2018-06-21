@@ -70,26 +70,16 @@
                       (subs 0 prefix-max-length))]
     (str app-prefix' suffix)))
 
-(defn- kw->str
-  "Convert a keyword to a string, preserving the keyword's namespace (if any)."
-  [^clojure.lang.Keyword kw]
-  (str (.-sym kw)))
-
-(defn- as-json
-  "Convert Clojure data structures to JSON, preserving namespaces on keys."
-  [data]
-  (json/write-str data :key-fn #(if (keyword? %) (kw->str %) %)))
-
 (pc/defnk replicaset->Service
   "Convert a Kuberentes ReplicaSet JSON response into a Waiter Service record."
   [spec
-   [:metadata name namespace [:annotations waiter/service-id]]
+   [:metadata name namespace [:annotations waiter-service-id]]
    [:status {replicas 0} {availableReplicas 0} {readyReplicas 0} {unavailableReplicas 0}]]
   (let [requested (get spec :replicas 0)
         staged (- (+ availableReplicas unavailableReplicas) replicas)]
     (scheduler/make-Service
       {:k8s-name name
-       :id service-id
+       :id waiter-service-id
        :instances requested
        :namespace namespace
        :task-count replicas
@@ -105,7 +95,7 @@
   ([pod restart-count]
    (let [pod-name (get-in pod [:metadata :name])
          instance-suffix (subs pod-name (- (count pod-name) pod-unique-suffix-length))
-         service-id (get-in pod [:metadata :annotations :waiter/service-id])]
+         service-id (get-in pod [:metadata :annotations :waiter-service-id])]
      (str service-id \. instance-suffix \- restart-count))))
 
 (defn- killed-by-k8s?
@@ -146,7 +136,7 @@
     (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
       (scheduler/make-ServiceInstance
         {:k8s-name (get-in pod [:metadata :labels :app])
-         :extra-ports (->> (get-in pod [:metadata :annotations :waiter/port-count])
+         :extra-ports (->> (get-in pod [:metadata :annotations :waiter-port-count])
                            Integer/parseInt range next (mapv #(+ port0 %)))
          :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
          :host (get-in pod [:status :podIP])
@@ -155,9 +145,9 @@
          :namespace (get-in pod [:metadata :namespace])
          :pod-name (get-in pod [:metadata :name])
          :port port0
-         :protocol (get-in pod [:metadata :annotations :waiter/protocol])
+         :protocol (get-in pod [:metadata :annotations :waiter-protocol])
          :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
-         :service-id (get-in pod [:metadata :annotations :waiter/service-id])
+         :service-id (get-in pod [:metadata :annotations :waiter-service-id])
          :started-at (-> pod
                          (get-in [:status :startTime])
                          (timestamp-str->datetime))}))
@@ -178,7 +168,7 @@
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
                               (and (not content-type ) body) (assoc :content-type "application/json")))]
-      (k8s-log "Response from K8s API server:" (as-json result))
+      (k8s-log "Response from K8s API server:" (json/write-str result))
       result)
     (catch [:status 400] _
       (log/error "Malformed K8s API request: " url options))
@@ -238,7 +228,7 @@
   "Make a JSON-patch request on a given Kubernetes object."
   [k8s-object-uri http-client ops]
   (api-request http-client k8s-object-uri
-               :body (as-json ops)
+               :body (json/write-str ops)
                :content-type "application/json-patch+json"
                :request-method :patch))
 
@@ -246,9 +236,7 @@
   "Update the replica count in the given Kubernetes object's spec."
   [k8s-object-uri http-client replicas replicas']
   (patch-object-json http-client k8s-object-uri
-                     ;; NOTE: ~1 is JSON-patch escape syntax for a "/" in a key name.
-                     ;; See http://jsonpatch.com/#json-pointer
-                     [{:op :test :path "/metadata/annotations/waiter~1app-status" :value "live"}
+                     [{:op :test :path "/metadata/annotations/waiter-app-status" :value "live"}
                       {:op :test :path "/spec/replicas" :value replicas}
                       {:op :replace :path "/spec/replicas" :value replicas'}]))
 
@@ -318,8 +306,8 @@
                      "/pods/"
                      pod-name)
         base-body {:kind "DeleteOptions" :apiVersion "v1"}
-        term-json (-> base-body (assoc :gracePeriodSeconds 300) (as-json))
-        kill-json (-> base-body (assoc :gracePeriodSeconds 0) (as-json))
+        term-json (-> base-body (assoc :gracePeriodSeconds 300) (json/write-str))
+        kill-json (-> base-body (assoc :gracePeriodSeconds 0) (json/write-str))
         make-kill-response (fn [killed? message status]
                              {:instance-id id :killed? killed?
                               :message message :service-id service-id :status status})]
@@ -397,7 +385,7 @@
                          (service-description->namespace service-description)
                          "/replicasets")
         response-json (api-request http-client request-url
-                                   :body (as-json spec-json)
+                                   :body (json/write-str spec-json)
                                    :request-method :post)]
     (replicaset->Service response-json)))
 
@@ -415,7 +403,7 @@
                             "/replicasets/"
                             (:k8s-name service))]
     (patch-object-json replicaset-url http-client
-                       [{:op :replace :path "/metadata/annotations/waiter~1app-status" :value "killed"}
+                       [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
                         {:op :replace :path "/spec/replicas" :value 0}])
     (doseq [pod (get-replicaset-pods scheduler service)
             :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
