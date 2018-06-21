@@ -19,10 +19,10 @@
             [clojure.tools.logging :as log]
             [plumbing.core :as pc]
             [slingshot.slingshot :as ss]
-            [waiter.util.http-utils :as http-utils]
             [waiter.scheduler :as scheduler]
             [waiter.service-description :as sd]
             [waiter.util.date-utils :as du]
+            [waiter.util.http-utils :as http-utils]
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 

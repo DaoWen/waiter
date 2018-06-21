@@ -109,7 +109,7 @@
 
 (defn non-neg-int? [x]
   "Returns true if x is a non-negative integer"
-  (and (integer? x) (<= 0 x)))
+  (and (integer? x) (non-neg? x)))
 
 (defn generate-secret-word
   [src-id dest-id processed-passwords]
