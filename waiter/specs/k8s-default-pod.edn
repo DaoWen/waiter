@@ -19,15 +19,15 @@
                                         :image "twosigma/kitchen:latest"
                                         :imagePullPolicy "IfNotPresent"
                                         :livenessProbe {:httpGet {:path #waiter/param :health-check-url
-                                                                  :port #waiter/port 0
+                                                                  :port #waiter/param :port0
                                                                   :scheme #waiter/param :backend-protocol-caps}
                                                         :failureThreshold #waiter/param :health-check-max-consecutive-failures
                                                         :initialDelaySeconds #waiter/param :grace-period-secs
                                                         :periodSeconds #waiter/param :health-check-interval-secs
                                                         :timeoutSeconds 1}
-                                        :ports [{:containerPort #waiter/port 0}]
+                                        :ports [{:containerPort #waiter/param :port0}]
                                         :readinessProbe {:httpGet {:path #waiter/param :health-check-url
-                                                                   :port #waiter/port 0
+                                                                   :port #waiter/param :port0
                                                                    :scheme #waiter/param :backend-protocol-caps}
                                                          :failureThreshold 1
                                                          :periodSeconds #waiter/param :health-check-interval-secs
