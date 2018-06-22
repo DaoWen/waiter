@@ -284,7 +284,6 @@
                                  :framework-id-ttl 900000
                                  :sync-deployment {:interval-ms (-> 15 t/seconds t/in-millis)
                                                    :timeout-cycles 4}}
-                                 :framework-id-ttl 900000}
                       :shell {:factory-fn 'waiter.scheduler.shell/shell-scheduler
                               :failed-instance-retry-interval-ms 5000
                               :health-check-interval-ms 5000
