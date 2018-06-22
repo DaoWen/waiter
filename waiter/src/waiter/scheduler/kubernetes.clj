@@ -252,13 +252,15 @@
   [patch-cmd retry-condition retry-cmd]
   `(let [patch-result# (ss/try+
                          ~patch-cmd
-                         (catch [:status 409] e#
-                           (with-meta ::conflict {:exception e#})))]
-     (if (not= ::conflict patch-result#)
+                         (catch [:status 409] _#
+                           (with-meta
+                             `conflict
+                             {:throw-context ~'&throw-context})))]
+     (if (not= `conflict patch-result#)
        patch-result#
        (if ~retry-condition
          ~retry-cmd
-         (throw (-> patch-result# meta :exception))))))
+         (throw (-> patch-result# meta :throw-context :throwable))))))
 
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
