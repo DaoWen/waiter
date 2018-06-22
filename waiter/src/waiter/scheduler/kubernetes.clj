@@ -394,9 +394,6 @@
    Ensures that all controlled Pods are deleted before removing the ReplicaSet.
    This operation will leave Waiter in a sane state on a failure."
   [{:keys [api-server-url http-client] :as scheduler} service]
-  (when-not service
-    (log/error "Null service passed to kubernetes delete-service.")
-    (ss/throw+ {:status 404 :message "Service not found"}))
   (let [replicaset-url (str api-server-url
                             "/apis/extensions/v1beta1/namespaces/"
                             (:namespace service)
@@ -416,23 +413,19 @@
   "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
    and return a corresponding Waiter Service record."
   [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
-  (try
-    (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-      (let [replicasets (->> (str api-server-url
-                                  "/apis/extensions/v1beta1/namespaces/"
-                                  service-ns
-                                  "/replicasets?labelSelector=managed-by=waiter,app="
-                                  (service-id->k8s-name scheduler service-id))
-                             (api-request http-client)
-                             :items)]
-        (when (seq replicasets)
-          (when (second replicasets)
-            (log/warn "Multiple matches found for Waiter Service"
-                      service-id replicasets))
-          (-> replicasets first replicaset->Service))))
-    (catch Throwable e
-      (log/error e "Error creating service record for service-id" service-id)
-      (comment "Returning nil on failure."))))
+  (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
+    (let [replicasets (->> (str api-server-url
+                                "/apis/extensions/v1beta1/namespaces/"
+                                service-ns
+                                "/replicasets?labelSelector=managed-by=waiter,app="
+                                (service-id->k8s-name scheduler service-id))
+                           (api-request http-client)
+                           :items)]
+      (when (seq replicasets)
+        (when (second replicasets)
+          (log/warn "Multiple matches found for Waiter Service"
+                    service-id replicasets))
+        (-> replicasets first replicaset->Service)))))
 
 ; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
@@ -483,7 +476,10 @@
          :status 500})))
 
   (app-exists? [this service-id]
-    (some? (service-id->service this service-id)))
+    (ss/try+
+      (some? (service-id->service this service-id))
+      (catch [:status 404] _
+        (comment "App does not exist."))))
 
   (create-app-if-new [this service-id->password-fn descriptor]
     (let [service-id (:service-id descriptor)]
