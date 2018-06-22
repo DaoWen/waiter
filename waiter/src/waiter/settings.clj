@@ -274,7 +274,8 @@
                                                   :socket-timeout 10000}
                                    :max-conflict-retries 5
                                    :max-name-length 63
-                                   :pod-base-port 31000}
+                                   :pod-base-port 31000
+                                   :replicaset-api-version "extensions/v1beta1"}
                       :marathon {:factory-fn 'waiter.scheduler.marathon/marathon-scheduler
                                  :home-path-prefix "/home/"
                                  :http-options {:conn-timeout 10000

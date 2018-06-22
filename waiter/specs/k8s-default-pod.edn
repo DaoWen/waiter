@@ -1,5 +1,5 @@
 {:kind "ReplicaSet"
- :apiVersion "extensions/v1beta1"
+ :apiVersion #waiter/param :replicaset-api-version
  :metadata {:name #waiter/param :k8s-name
             :labels {:app #waiter/param :k8s-name
                      :managed-by "waiter"}
