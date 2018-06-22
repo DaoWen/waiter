@@ -366,11 +366,7 @@
                 :ssl? (= "https" backend-proto)}
         edn-opts {:readers {'waiter/param params
                             'waiter/param-str (comp str params)
-                            'waiter/port #(+ port0 %)
-                            'waiter.fn/into (fn [[xs ys]] (into xs ys))
-                            'waiter.fn/lower-case string/upper-case
-                            'waiter.fn/str #(apply str %)
-                            'waiter.fn/upper-case string/upper-case}}]
+                            'waiter/port #(+ port0 %)}}]
     (try
       (->> replicaset-spec-file-path slurp (edn/read-string edn-opts))
       (catch Throwable e
