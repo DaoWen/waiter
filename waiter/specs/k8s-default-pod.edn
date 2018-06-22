@@ -16,7 +16,8 @@
                    :spec {:containers [{:name #waiter/param :k8s-name
                                         :command ["/bin/sh" "-c" #waiter/param :cmd]
                                         :env #waiter/param :env
-                                        :image "daowen/waiter-kitchen:latest"
+                                        :image "twosigma/kitchen:latest"
+                                        :imagePullPolicy "IfNotPresent"
                                         :livenessProbe {:httpGet {:path #waiter/param :health-check-url
                                                                   :port #waiter/port 0
                                                                   :scheme #waiter/param :backend-protocol-caps}

@@ -21,8 +21,8 @@ KITCHEN_DIR=${WAITER_DIR}/../kitchen
 # Start minikube
 ${DIR}/minikube-setup.sh
 
-# Pre-fetch our test image
-docker pull daowen/waiter-kitchen:latest
+# Ensure we have the docker image for the pods
+${KITCHEN_DIR}/bin/build-docker-image.sh
 
 # Start waiter
 WAITER_PORT=9091
