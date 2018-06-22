@@ -96,7 +96,8 @@
 
 (defn- pod->instance-id
   "Construct the Waiter instance-id for the given Kubernetes pod incarnation.
-   Note that a new Waiter Service Instance is created each time a pod restarts."
+   Note that a new Waiter Service Instance is created each time a pod restarts,
+   and that we generate a unique instance-id by including the pod's restartCount value."
   ([pod] (pod->instance-id pod (get-in pod [:status :containerStatuses 0 :restartCount])))
   ([pod restart-count]
    (let [pod-name (get-in pod [:metadata :name])
@@ -114,7 +115,9 @@
 
 (defn- track-failed-instances!
   "Update this KubernetesScheduler's service-id->failed-instances-transient-store
-   when a new pod failure is listed in the given pod's lastState container status."
+   when a new pod failure is listed in the given pod's lastState container status.
+   Note that unique instance-ids are deterministically generated each time the pod is restarted
+   by passing the pod's restartCount value to the pod->instance-id function."
   [{:keys [service-id] :as live-instance} {:keys [service-id->failed-instances-transient-store]} pod]
   (when-let [newest-failure (get-in pod [:status :containerStatuses 0 :lastState :terminated])]
     (let [failure-flags (if (= "OOMKilled" (:reason newest-failure)) #{:memory-limit-exceeded} #{})
@@ -124,8 +127,8 @@
           failures (-> service-id->failed-instances-transient-store deref (get service-id))]
       (when-not (contains? failures newest-failure-id)
         (let [newest-failure-instance (merge live-instance
-                                             ; to match the behavior of the marathon scheduler,
-                                             ; don't include the exit code in failed instances that were killed by k8s
+                                             ;; To match the behavior of the marathon scheduler,
+                                             ;; we don't include the exit code in failed instances that were killed by k8s.
                                              (when-not (killed-by-k8s? newest-failure)
                                                {:exit-code (:exitCode newest-failure)})
                                              {:flags failure-flags
