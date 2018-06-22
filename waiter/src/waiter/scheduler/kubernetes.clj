@@ -346,27 +346,28 @@
                                {:name k :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i) :value (str (+ port0 i))})))
-        params {:k8s-name (service-id->k8s-name scheduler service-id)
-                :backend-protocol backend-proto
-                :backend-protocol-caps (string/upper-case backend-proto)
-                :cmd cmd
-                :cpus cpus
-                :env template-env
-                :grace-period-secs grace-period-secs
-                :health-check-interval-secs health-check-interval-secs
-                :health-check-max-consecutive-failures health-check-max-consecutive-failures
-                :health-check-url (sd/service-description->health-check-url service-description)
-                :home-path home-path
-                :memory  (str mem "Mi")
-                :min-instances min-instances
-                :port-count ports
-                :replicaset-api-version replicaset-api-version
-                :run-as-user run-as-user
-                :service-id service-id
-                :ssl? (= "https" backend-proto)}
+        params (into {:k8s-name (service-id->k8s-name scheduler service-id)
+                      :backend-protocol backend-proto
+                      :backend-protocol-caps (string/upper-case backend-proto)
+                      :cmd cmd
+                      :cpus cpus
+                      :env template-env
+                      :grace-period-secs grace-period-secs
+                      :health-check-interval-secs health-check-interval-secs
+                      :health-check-max-consecutive-failures health-check-max-consecutive-failures
+                      :health-check-url (sd/service-description->health-check-url service-description)
+                      :home-path home-path
+                      :memory  (str mem "Mi")
+                      :min-instances min-instances
+                      :port-count ports
+                      :replicaset-api-version replicaset-api-version
+                      :run-as-user run-as-user
+                      :service-id service-id
+                      :ssl? (= "https" backend-proto)}
+                     (for [i (range ports)]
+                       [(keyword (str "port" i)) (+ port0 i)]))
         edn-opts {:readers {'waiter/param params
-                            'waiter/param-str (comp str params)
-                            'waiter/port #(+ port0 %)}}]
+                            'waiter/param-str (comp str params)}}]
     (try
       (->> replicaset-spec-file-path slurp (edn/read-string edn-opts))
       (catch Throwable e
