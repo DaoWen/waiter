@@ -581,7 +581,7 @@
          (utils/non-neg-int? max-conflict-retries)
          (utils/pos-int? max-name-length)
          (integer? pod-base-port)
-         (<= 1024 pod-base-port 49151)  ; registered port range
+         (< 0 pod-base-port 65527)  ; max port is 65535, and we need to reserve up to 10 ports
          (.exists (io/as-file replicaset-spec-file-path))
          (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
