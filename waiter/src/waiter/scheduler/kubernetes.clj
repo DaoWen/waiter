@@ -31,6 +31,12 @@
   [& args]
   `(log/log "Kubernetes" :debug nil (print-str ~@args)))
 
+(defn mock-auth-refresh []
+  "Mock implementation of the authentication string refresh function.
+   Returns a string to be used as the value for the Authorization HTTP header."
+  (log/info "Called auth refresh function")
+  "Bearer abcxyz")
+
 (def k8s-api-auth-str
   "Atom containing authentication string for the Kubernetes API server.
    This value may be periodically refereshed asynchronously."

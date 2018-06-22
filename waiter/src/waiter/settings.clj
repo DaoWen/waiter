@@ -269,7 +269,9 @@
              ; throttles the rate at which kill requests are sent to the scheduler
              :inter-kill-request-wait-time-ms 1000}
    :scheduler-config {:kind :marathon
-                      :kubernetes {:factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
+                      :kubernetes {; Default values are not provided below for the following keys:
+                                   ; :authentication :replicaset-spec-file-path :url
+                                   :factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}
                                    :max-conflict-retries 5
