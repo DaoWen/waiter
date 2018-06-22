@@ -440,9 +440,8 @@
   scheduler/ServiceScheduler
 
   (get-apps->instances [this]
-    (->> this
-         get-services
-         (pc/map-from-keys (partial instances-breakdown this))))
+    (pc/map-from-keys #(instances-breakdown this %)
+                      (get-services this)))
 
   (get-apps [this]
     (get-services this))
@@ -558,16 +557,19 @@
   "Initialize the k8s-api-auth-str atom,
    and optionally start a chime to periodically referesh the value."
   [{:keys [refresh-delay-minutes refresh-fn]}]
+  {:pre [(or (nil? refresh-delay-minutes)
+             (utils/pos-int? refresh-delay-minutes))
+         (fn? refresh-fn)]}
   (let [refresh (-> refresh-fn utils/resolve-symbol deref)
         auth-update-fn (fn auth-update []
                          (if-let [auth-str' (refresh)]
                            (reset! k8s-api-auth-str auth-str')))]
     (auth-update-fn)
     (when [refresh-delay-minutes]
-      (assert (utils/pos-int? refresh-delay-minutes))
-      (-> refresh-delay-minutes
-          t/minutes
-          (du/start-timer-task auth-update-fn)))))
+      (du/start-timer-task
+        (t/minutes refresh-delay-minutes)
+        auth-update-fn
+        :delay-ms (* 60000 refresh-delay-minutes)))))
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the

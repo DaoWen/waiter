@@ -19,8 +19,8 @@
             [clojure.walk :as walk]
             [plumbing.core :as pc]
             [slingshot.slingshot :as ss]
-            [waiter.scheduler.kubernetes :refer :all]
             [waiter.scheduler :as scheduler]
+            [waiter.scheduler.kubernetes :refer :all]
             [waiter.util.date-utils :as du])
   (:import (waiter.scheduler Service ServiceInstance)
            (waiter.scheduler.kubernetes KubernetesScheduler)))
