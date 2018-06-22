@@ -404,9 +404,9 @@
     (patch-object-json replicaset-url http-client
                        [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
                         {:op :replace :path "/spec/replicas" :value 0}])
-    (doseq [pod (get-replicaset-pods scheduler service)
-            :let [pod-url (->> pod :metadata :selfLink (str api-server-url))]]
-      (api-request http-client pod-url :request-method :delete))
+    (doseq [pod (get-replicaset-pods scheduler service)]
+      (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
+        (api-request http-client pod-url :request-method :delete)))
     (api-request http-client replicaset-url :request-method :delete)
     {:message (str "Kubernetes deleted ReplicaSet for " (:k8s-name service))
      :result :deleted}))
