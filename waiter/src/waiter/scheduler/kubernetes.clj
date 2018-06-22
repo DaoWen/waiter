@@ -26,11 +26,6 @@
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
-(defmacro k8s-log
-  "Log Kubernetes-specific messages."
-  [& args]
-  `(log/log "Kubernetes" :debug nil (print-str ~@args)))
-
 (defn mock-auth-refresh []
   "Mock implementation of the authentication string refresh function.
    Returns a string to be used as the value for the Authorization HTTP header."
@@ -169,7 +164,7 @@
    If data is provided via :body, the application/json content type is added automatically.
    The response payload (if any) is automatically parsed to JSON."
   [client url & {:keys [body content-type request-method] :as options}]
-  (k8s-log "Making request to K8s API server:" url request-method body)
+  (scheduler/log "Making request to K8s API server:" url request-method body)
   (ss/try+
     (let [auth-str @k8s-api-auth-str
           result (pc/mapply http-utils/http-request client url
@@ -177,7 +172,7 @@
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
                               (and (not content-type ) body) (assoc :content-type "application/json")))]
-      (k8s-log "Response from K8s API server:" (json/write-str result))
+      (scheduler/log "Response from K8s API server:" (json/write-str result))
       result)
     (catch [:status 400] _
       (log/error "Malformed K8s API request: " url options))
@@ -572,7 +567,7 @@
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
-  configuration against kubernetes-scheduler-schema and throws if it's not valid."
+   configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options max-conflict-retries max-name-length
            pod-base-port replicaset-api-version replicaset-spec-file-path
            service-id->service-description-fn url]}]
