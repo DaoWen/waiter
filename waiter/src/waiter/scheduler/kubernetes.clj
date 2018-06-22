@@ -183,12 +183,11 @@
 (defn- get-services
   "Get all Waiter Services (reified as ReplicaSets) running in this Kubernetes cluster."
   [{:keys [api-server-url http-client] :as scheduler}]
-  (->>
-    "/apis/extensions/v1beta1/replicasets?labelSelector=managed-by=waiter"
-    (str api-server-url)
-    (api-request http-client)
-    :items
-    (mapv replicaset->Service)))
+  (->> (str api-server-url "/apis/" replicaset-api-version
+            "/replicasets?labelSelector=managed-by=waiter")
+       (api-request http-client)
+       :items
+       (mapv replicaset->Service)))
 
 (defn- get-replicaset-pods
   "Get all Kubernetes pods associated with the given Waiter Service's corresponding ReplicaSet."
@@ -262,15 +261,17 @@
          ~retry-cmd
          (throw (-> patch-result# meta :throw-context :throwable))))))
 
+(defn- build-replicaset-url
+  "Build the URL for the given Waiter Service's ReplicaSet."
+  [{:keys [api-server-url]} {:keys [namespace k8s-name]}]
+  (str api-server-url "/apis/" replicaset-api-version
+       "/namespaces/" namespace "/replicasets/" k8s-name))
+
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
    Only used for upward scaling. No-op if it would result in downward scaling."
-  [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances']
-  (let [replicaset-url (str api-server-url
-                         "/apis/extensions/v1beta1/namespaces/"
-                         (:namespace service)
-                         "/replicasets/"
-                         (:k8s-name service))]
+  [{:keys [http-client max-conflict-retries] :as scheduler} service instances']
+  (let [replicaset-url (build-replicaset-url scheduler service)]
     (loop [attempt 1
            instances (:instances service)]
       (if (<= instances' instances)
@@ -284,12 +285,8 @@
 (defn- scale-service-by-delta
   "Scale the number of instances for a given service by a given delta.
    Can scale either upward (positive delta) or downward (negative delta)."
-  [{:keys [api-server-url http-client max-conflict-retries] :as scheduler} service instances-delta]
-  (let [replicaset-url (str api-server-url
-                            "/apis/extensions/v1beta1/namespaces/"
-                            (:namespace service)
-                            "/replicasets/"
-                            (:k8s-name service))]
+  [{:keys [http-client max-conflict-retries] :as scheduler} service instances-delta]
+  (let [replicaset-url (build-replicaset-url scheduler service)]
     (loop [attempt 1
            instances (:instances service)]
       (let [instances' (+ instances instances-delta)]
@@ -332,10 +329,12 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [replicaset-spec-file-path pod-base-port] :as scheduler} service-id service-description service-id->password-fn]
-  (let [{:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
-                health-check-max-consecutive-failures mem min-instances ports run-as-user]} service-description
-        home-path (str "/home/" run-as-user)
+  [{:keys [replicaset-api-version replicaset-spec-file-path pod-base-port] :as scheduler}
+   service-id
+   {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
+           health-check-max-consecutive-failures mem min-instances ports run-as-user] :as service-description}
+   service-id->password-fn]
+  (let [home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
         port0 pod-base-port
@@ -361,6 +360,7 @@
                 :memory  (str mem "Mi")
                 :min-instances min-instances
                 :port-count ports
+                :replicaset-api-version replicaset-api-version
                 :run-as-user run-as-user
                 :service-id service-id
                 :ssl? (= "https" backend-proto)}
@@ -382,10 +382,8 @@
   [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec scheduler service-id service-description service-id->password-fn)
-        request-url (str api-server-url
-                         "/apis/extensions/v1beta1/namespaces/"
-                         (service-description->namespace service-description)
-                         "/replicasets")
+        request-url (str api-server-url "/apis/" replicaset-api-version "/namespaces/"
+                         (service-description->namespace service-description) "/replicasets")
         response-json (api-request http-client request-url
                                    :body (json/write-str spec-json)
                                    :request-method :post)]
@@ -396,11 +394,7 @@
    Ensures that all controlled Pods are deleted before removing the ReplicaSet.
    This operation will leave Waiter in a sane state on a failure."
   [{:keys [api-server-url http-client] :as scheduler} service]
-  (let [replicaset-url (str api-server-url
-                            "/apis/extensions/v1beta1/namespaces/"
-                            (:namespace service)
-                            "/replicasets/"
-                            (:k8s-name service))]
+  (let [replicaset-url (build-replicaset-url scheduler service)]
     (patch-object-json replicaset-url http-client
                        [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
                         {:op :replace :path "/spec/replicas" :value 0}])
@@ -414,11 +408,10 @@
 (defn service-id->service
   "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
    and return a corresponding Waiter Service record."
-  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} service-id]
+  [{:keys [api-server-url http-client replicaset-api-version service-id->service-description-fn] :as scheduler} service-id]
   (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-    (let [replicasets (->> (str api-server-url
-                                "/apis/extensions/v1beta1/namespaces/"
-                                service-ns
+    (let [replicasets (->> (str api-server-url "/apis/" replicaset-api-version
+                                "/namespaces/" service-ns
                                 "/replicasets?labelSelector=managed-by=waiter,app="
                                 (service-id->k8s-name scheduler service-id))
                            (api-request http-client)
@@ -575,13 +568,15 @@
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
   configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options max-conflict-retries max-name-length
-           pod-base-port replicaset-spec-file-path service-id->service-description-fn url]}]
+           pod-base-port replicaset-api-version replicaset-spec-file-path
+           service-id->service-description-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
          (utils/non-neg-int? max-conflict-retries)
          (utils/pos-int? max-name-length)
          (integer? pod-base-port)
          (< 0 pod-base-port 65527)  ; max port is 65535, and we need to reserve up to 10 ports
+         (not (string/blank? replicaset-api-version))
          (.exists (io/as-file replicaset-spec-file-path))
          (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
@@ -592,6 +587,7 @@
                            max-conflict-retries
                            max-name-length
                            pod-base-port
+                           replicaset-api-version
                            replicaset-spec-file-path
                            service-id->failed-instances-transient-store
                            service-id->service-description-fn)))
