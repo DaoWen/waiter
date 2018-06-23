@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import socketserver
+import urllib.parse
 import zlib
 
 def split2(string, delimiter, *options, default=None):
@@ -69,7 +70,9 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         # Send response headers
         self.protocol_version = 'HTTP/1.1'
         self.send_response(self.__status)
-        for k, v in self.__cookies.items():
+        for k, v in sorted(self.__cookies.items()):
+            k = urllib.parse.quote_plus(k)
+            v = urllib.parse.quote_plus(v)
             self.send_header('Set-Cookie', '{}={}'.format(k, v))
         for k, v in self.__headers.items():
             self.send_header(k, v)
@@ -189,7 +192,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         elif path == '/request-info':
             info = { 'request-method': self.__method, 'uri': path }
             if len(self.headers) > 0:
-                info['headers'] = dict(self.headers)
+                info['headers'] = { k.lower(): v for k, v in self.headers.items() }
             if query_string is not None:
                 info['query-string'] = query_string
             self.__set_response(json.dumps(info, sort_keys=True).encode('utf-8'))
