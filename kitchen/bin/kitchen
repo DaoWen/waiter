@@ -57,7 +57,6 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             self.__response_bytes = itertools.islice(self.__response_bytes, self.__response_length)
             self.__response_bytes = self.__data_transform(bytes(self.__response_bytes))
             self.__response_length = len(self.__response_bytes)
-            print("Compressed bytes: {}".format(self.__response_length))
 
         # Handle content length / chunking
         if self.__chunked:
@@ -81,11 +80,9 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         response_bytes = itertools.islice(self.__response_bytes, actual_response_length)
 
         # Send response body
-        print("Writing total bytes: {}".format(self.__response_length))
         bytes_written = 0
         while True:
             chunk = bytes(itertools.islice(response_bytes, self.__chunk_size))
-            print("Writing bytes: {}".format(len(chunk)))
             if len(chunk) == 0:
                 if self.__chunked:
                     self.wfile.write(b'0\r\n\r\n')
@@ -96,13 +93,11 @@ class JayJay(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(chunk_header.encode('ascii'))
                 self.wfile.write(chunk)
                 bytes_written += len(chunk)
-                print("Wrote {} bytes so far".format(bytes_written))
                 if bytes_written == self.__truncated_length:
                     break
                 if self.__chunked:
                     self.wfile.write(b'\r\n')
                 self.wfile.flush()
-        print("Response complete!")
 
         # Optionally trigger a fatal server error (exit)
         if self.__exit_process:
