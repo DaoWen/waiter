@@ -184,7 +184,7 @@
       (try
         (log/info "Creating token for" token)
         (let [{:keys [status body]}
-              (post-token waiter-url {:cmd (kitchen-cmd (str "-p $PORT0 " (t/in-millis grace-period)))
+              (post-token waiter-url {:cmd (kitchen-cmd (str "-p $PORT0 --start-up-sleep-ms " (t/in-millis grace-period)))
                                       :version "not-used"
                                       :cpus 1
                                       :mem 1024
