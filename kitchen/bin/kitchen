@@ -162,7 +162,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             self.__truncated_length = int(truncated_size)
 
     def __process_path(self):
-        path, query_string = split2(self.path, '?')
+        path, query_string = split2(self.path, '?', 1)
 
         if query_string:
             query_params = dict(split2(param, '=', 1) for param in query_string.split('&'))
