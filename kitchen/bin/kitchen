@@ -25,8 +25,23 @@ max_response_size = 50000000  # 50MB
 default_chunk_size = 256
 
 class JayJay(http.server.BaseHTTPRequestHandler):
+    def do_COPY(self):
+        self.__handle_request('copy')
+
+    def do_DELETE(self):
+        self.__handle_request('delete')
+
     def do_GET(self):
         self.__handle_request('get')
+
+    def do_HEAD(self):
+        self.__handle_request('head')
+
+    def do_MOVE(self):
+        self.__handle_request('move')
+
+    def do_PATCH(self):
+        self.__handle_request('patch')
 
     def do_POST(self):
         self.__handle_request('post')
