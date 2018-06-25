@@ -58,9 +58,9 @@
     (fn sanitizer [x]
       (cond
         (instance? Service x)
-        (dissoc x :k8s-name :namespace)
+        (dissoc x :k8s/app-name :k8s/namespace)
         (instance? ServiceInstance x)
-        (dissoc x :k8s-name :namespace :pod-name :restart-count)
+        (dissoc x :k8s/app-name :k8s/namespace :k8s/pod-name :k8s/restart-count)
         :else x))
     walkable-collection))
 
@@ -534,7 +534,7 @@
 
 (deftest test-kill-instance
   (let [service-id "test-service-id"
-        service (scheduler/make-Service {:id service-id :instances 1 :namespace "myself"})
+        service (scheduler/make-Service {:id service-id :instances 1 :k8s/namespace "myself"})
         instance-id "instance-id"
         instance (scheduler/make-ServiceInstance
                    {:extra-ports []
@@ -542,7 +542,7 @@
                     :host "10.141.141.10"
                     :id instance-id
                     :log-directory "/home/myself"
-                    :namespace "myself"
+                    :k8s/namespace "myself"
                     :port 8080
                     :protocol "https"
                     :service-id service-id
@@ -632,11 +632,11 @@
         make-instance (fn [service-id instance-suffix]
                         (let [instance-id (str service-id \. instance-suffix)]
                           {:id instance-id
-                           :namespace (-> dummy-scheduler
+                           :k8s/namespace (-> dummy-scheduler
                                           :service-id->service-description-fn
                                           (get service-id)
                                           (get "run-as-user"))
-                           :pod-name (str instance-id "-0")
+                           :k8s/pod-name (str instance-id "-0")
                            :service-id service-id}))
         make-killed-instance (fn [service-id instance-suffix]
                                (assoc (make-instance service-id instance-suffix)
@@ -644,7 +644,7 @@
     (with-redefs [api-request (constantly {:status "OK"})
                   service-id->service (fn service-id->dummy-service [_ service-id]
                                         (scheduler/make-Service
-                                          {:id service-id :instances 1 :namespace "myself"}))
+                                          {:id service-id :instances 1 :k8s/namespace "myself"}))
                   t/now (constantly current-time)]
       (testing "tracking-instance-killed"
 
@@ -730,7 +730,7 @@
 
 (deftest test-delete-app
   (let [service-id "test-service-id"
-        service (scheduler/make-Service {:id service-id :instances 1 :k8s-name service-id :namespace "myself"})
+        service (scheduler/make-Service {:id service-id :instances 1 :k8s/app-name service-id :k8s/namespace "myself"})
         dummy-scheduler (make-dummy-scheduler [service-id])]
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-delete"
@@ -766,7 +766,7 @@
 (deftest test-scale-app
   (let [instances' 4
         service-id "test-service-id"
-        service (scheduler/make-Service {:id service-id :instances 1 :k8s-name service-id :namespace "myself"})
+        service (scheduler/make-Service {:id service-id :instances 1 :k8s/app-name service-id :k8s/namespace "myself"})
         dummy-scheduler (make-dummy-scheduler [service-id])]
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-scale"
