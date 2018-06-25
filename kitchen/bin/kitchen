@@ -58,6 +58,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         self.__exit_process = False
         self.__headers = {'Connection': 'close', 'Content-Type': 'text/plain'}
         self.__method = method
+        self.__path = None
         self.__query = None
         self.__response_bytes = None
         self.__response_length = max_response_size
@@ -65,14 +66,15 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         self.__truncated_length = max_response_size + 1
 
         # Process request parameters
-        self.__process_headers()
         self.__process_path()
+        self.__process_headers()
 
         # Optionally transform response bytes
+        response_bytes = self.__response_bytes
         if self.__data_transform is not None:
-            self.__response_bytes = itertools.islice(self.__response_bytes, self.__response_length)
-            self.__response_bytes = self.__data_transform(bytes(self.__response_bytes))
-            self.__response_length = len(self.__response_bytes)
+            response_bytes = itertools.islice(response_bytes, self.__response_length)
+            response_bytes = self.__data_transform(bytes(response_bytes))
+            self.__response_length = len(response_bytes)
 
         # Handle content length / chunking
         if self.__chunked:
@@ -122,6 +124,8 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             self.__terminate('failure header')
 
     def __process_headers(self):
+        assert self.__path is not None, 'Processes headers AFTER processing the request path.'
+
         # Send "busy" response code
         act_busy = self.headers.get('x-kitchen-act-busy')
         if act_busy is not None:
@@ -159,8 +163,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         # Echo request body back to client
         if self.headers.get('x-kitchen-echo') is not None:
             post_bytes_count = int(self.headers.get('content-length', 0))
-            self.__response_bytes = self.rfile.read(post_bytes_count)
-            self.__response_length = len(self.__response_bytes)
+            self.__set_response(self.rfile.read(post_bytes_count))
 
         # Kill the whole server on failure
         if self.headers.get('x-kitchen-fail-by-terminating-jvm') is not None:
@@ -178,6 +181,8 @@ class JayJay(http.server.BaseHTTPRequestHandler):
 
     def __process_path(self):
         path, query_string = split2(self.path, '?', 1)
+        self.__path = path
+        self.__query = query_string
 
         if query_string:
             query_params = dict(split2(param, '=', 1) for param in query_string.split('&'))
@@ -189,7 +194,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
 
         elif path == '/chunked':
             self.__chunked = True
-            self.__response_bytes = itertools.cycle(lorem_ipsum)
+            self.__set_response(itertools.cycle(lorem_ipsum), max_response_size)
 
         elif path == '/die':
             self.__terminate('/die endpoint')
@@ -202,7 +207,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         elif path == '/gzip':
             self.__data_transform = zlib.compress
             self.__headers['Content-Encoding'] = 'gzip'
-            self.__response_bytes = itertools.cycle(lorem_ipsum)
+            self.__set_response(itertools.cycle(lorem_ipsum), max_response_size)
 
         elif path == '/request-info':
             info = { 'request-method': self.__method, 'uri': path }
@@ -219,7 +224,7 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             time.sleep(sleep_ms / 1000.0)
 
         elif path == '/unchunked':
-            self.__response_bytes = itertools.cycle(lorem_ipsum)
+            self.__set_response(itertools.cycle(lorem_ipsum), max_response_size)
 
         if self.__response_bytes is None:
             # Set default response
