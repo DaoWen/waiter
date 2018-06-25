@@ -22,7 +22,7 @@ def split2(string, delimiter, *options, default=None):
 lorem_ipsum = b'Lorem ipsum dolor sit amet, proin in nibh tellus penatibus, viverra nunc risus ligula proin ligula.'
 
 max_response_size = 50000000  # 50MB
-default_chunk_size = 256
+default_chunk_size = 1024
 
 class JayJay(http.server.BaseHTTPRequestHandler):
     def do_COPY(self):
