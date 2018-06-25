@@ -383,7 +383,9 @@
 
 (defn- create-service
   "Reify a Waiter Service as a Kubernetes ReplicaSet."
-  [service-id descriptor {:keys [api-server-url http-client replicaset-api-version] :as scheduler} service-id->password-fn]
+  [{:keys [service-id] :as descriptor}
+   {:keys [api-server-url http-client replicaset-api-version] :as scheduler}
+   service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec scheduler service-id service-description service-id->password-fn)
         request-url (str api-server-url "/apis/" replicaset-api-version "/namespaces/"
@@ -483,16 +485,15 @@
       (catch [:status 404] _
         (comment "App does not exist."))))
 
-  (create-app-if-new [this service-id->password-fn descriptor]
-    (let [service-id (:service-id descriptor)]
-      (when-not (scheduler/app-exists? this service-id)
-        (ss/try+
-          (create-service service-id descriptor this service-id->password-fn)
-          (catch [:status 409] _
-            (log/error "Conflict status when trying to start app. Is app starting up?"
-                       descriptor))
-          (catch Throwable e
-            (log/error e "Error starting new app." descriptor))))))
+  (create-app-if-new [this service-id->password-fn {:keys [service-id] :as descriptor}]
+    (when-not (scheduler/app-exists? this service-id)
+      (ss/try+
+        (create-service descriptor this service-id->password-fn)
+        (catch [:status 409] _
+          (log/error "Conflict status when trying to start app. Is app starting up?"
+                     descriptor))
+        (catch Throwable e
+          (log/error e "Error starting new app." descriptor)))))
 
   (delete-app [this service-id]
     (ss/try+
