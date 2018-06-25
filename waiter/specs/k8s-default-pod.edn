@@ -2,14 +2,14 @@
  :apiVersion #waiter/param :replicaset-api-version
  :metadata {:name #waiter/param :k8s-name
             :labels {:app #waiter/param :k8s-name
-                     :managed-by "waiter"}
+                     :managed-by #waiter/param :orchestrator-name}
             :annotations {:waiter-app-status "live"
                           :waiter-service-id #waiter/param :service-id}}
  :spec {:replicas #waiter/param :min-instances
         :selector {:matchLabels {:app #waiter/param :k8s-name
-                                 :managed-by "waiter"}}
+                                 :managed-by #waiter/param :orchestrator-name}}
         :template {:metadata {:labels {:app #waiter/param :k8s-name
-                                       :managed-by "waiter"}
+                                       :managed-by #waiter/param :orchestrator-name}
                               :annotations {:waiter-port-count #waiter/param-str :port-count
                                             :waiter-protocol #waiter/param :backend-protocol
                                             :waiter-service-id #waiter/param :service-id}}

@@ -187,9 +187,10 @@
 
 (defn- get-services
   "Get all Waiter Services (reified as ReplicaSets) running in this Kubernetes cluster."
-  [{:keys [api-server-url http-client] :as scheduler}]
+  [{:keys [api-server-url http-client orchestrator-name] :as scheduler}]
   (->> (str api-server-url "/apis/" replicaset-api-version
-            "/replicasets?labelSelector=managed-by=waiter")
+            "/replicasets?labelSelector=managed-by="
+             orchestrator-name)
        (api-request http-client)
        :items
        (mapv replicaset->Service)))
@@ -334,7 +335,7 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [replicaset-api-version replicaset-spec-file-path pod-base-port] :as scheduler}
+  [{:keys [orchestrator-name pod-base-port replicaset-api-version replicaset-spec-file-path] :as scheduler}
    service-id
    {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
            health-check-max-consecutive-failures mem min-instances ports run-as-user] :as service-description}
@@ -364,6 +365,7 @@
                       :home-path home-path
                       :memory  (str mem "Mi")
                       :min-instances min-instances
+                      :orchestrator-name orchestrator-name
                       :port-count ports
                       :replicaset-api-version replicaset-api-version
                       :run-as-user run-as-user
@@ -410,12 +412,14 @@
 (defn service-id->service
   "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
    and return a corresponding Waiter Service record."
-  [{:keys [api-server-url http-client replicaset-api-version service-id->service-description-fn] :as scheduler} service-id]
+  [{:keys [api-server-url http-client orchestrator-name replicaset-api-version
+           service-id->service-description-fn] :as scheduler}
+   service-id]
   (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
     (let [replicasets (->> (str api-server-url "/apis/" replicaset-api-version
                                 "/namespaces/" service-ns
-                                "/replicasets?labelSelector=managed-by=waiter,app="
-                                (service-id->k8s-name scheduler service-id))
+                                "/replicasets?labelSelector=managed-by=" orchestrator-name
+                                ",app=" (service-id->k8s-name scheduler service-id))
                            (api-request http-client)
                            :items)]
       (when (seq replicasets)
@@ -428,6 +432,7 @@
 (defrecord KubernetesScheduler [api-server-url http-client
                                 max-conflict-retries
                                 max-name-length
+                                orchestrator-name
                                 pod-base-port
                                 replicaset-spec-file-path
                                 service-id->failed-instances-transient-store
@@ -570,12 +575,13 @@
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options max-conflict-retries max-name-length
-           pod-base-port replicaset-api-version replicaset-spec-file-path
-           service-id->service-description-fn url]}]
+           orchestrator-name pod-base-port replicaset-api-version
+           replicaset-spec-file-path service-id->service-description-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
          (utils/non-neg-int? max-conflict-retries)
          (utils/pos-int? max-name-length)
+         (not (string/blank? orchestrator-name))
          (integer? pod-base-port)
          (< 0 pod-base-port 65527)  ; max port is 65535, and we need to reserve up to 10 ports
          (not (string/blank? replicaset-api-version))
@@ -588,6 +594,7 @@
     (->KubernetesScheduler url http-client
                            max-conflict-retries
                            max-name-length
+                           orchestrator-name
                            pod-base-port
                            replicaset-api-version
                            replicaset-spec-file-path
