@@ -26,15 +26,16 @@
             [waiter.util.utils :as utils])
   (:import (org.joda.time.format DateTimeFormat)))
 
-(defn mock-auth-refresh []
-  "Mock implementation of the authentication string refresh function.
-   Returns a string to be used as the value for the Authorization HTTP header."
-  (log/info "Called auth refresh function")
-  "Bearer abcxyz")
+(defn authorization-from-environment []
+  "Sample implementation of the authentication string refresh function.
+   Returns a string to be used as the value for the Authorization HTTP header,
+   reading the string from the WAITER_K8S_AUTH_STRING environment variable."
+  (log/info "Called waiter.scheduler.kubernetes/authorization-from-environment")
+  (System/getenv "WAITER_K8S_AUTH_STRING"))
 
 (def k8s-api-auth-str
   "Atom containing authentication string for the Kubernetes API server.
-   This value may be periodically refereshed asynchronously."
+   This value may be periodically refreshed asynchronously."
   (atom nil))
 
 (def k8s-timestamp-format
