@@ -298,6 +298,9 @@
                                  ;; Maximum number of characters allowed for a Kubernetes object name:
                                  :max-name-length 63
 
+                                 ;; String value used to annotate Kubernetes objects that are orchestrated by this Waiter instantiation:
+                                 :orchestrator-name "waiter"
+
                                  ;; Port number used to set the $PORT0 (service port) for Waiter service instances.
                                  ;; If more than one port is requested, $PORT1 thru $PORT9 will be defined sequentially after $PORT0
                                  ;; (e.g., if pod-base-port is 8080, then $PORT0==8080 and $PORT9==8089):
