@@ -589,7 +589,7 @@
          (integer? pod-base-port)
          (< 0 pod-base-port 65527)  ; max port is 65535, and we need to reserve up to 10 ports
          (not (string/blank? replicaset-api-version))
-         (.exists (io/as-file replicaset-spec-file-path))
+         (some-> replicaset-spec-file-path io/as-file .exists)
          (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
         service-id->failed-instances-transient-store (atom {})]
