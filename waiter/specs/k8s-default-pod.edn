@@ -13,8 +13,7 @@
                               :annotations {:waiter-port-count #waiter/param-str :port-count
                                             :waiter-protocol #waiter/param :backend-protocol
                                             :waiter-service-id #waiter/param :service-id}}
-                   :spec {:containers [{:name #waiter/param :k8s-name
-                                        :command ["/bin/sh" "-c" #waiter/param :cmd]
+                   :spec {:containers [{:command ["/bin/sh" "-c" #waiter/param :cmd]
                                         :env #waiter/param :env
                                         :image "twosigma/kitchen:latest"
                                         :imagePullPolicy "IfNotPresent"
@@ -25,6 +24,7 @@
                                                         :initialDelaySeconds #waiter/param :grace-period-secs
                                                         :periodSeconds #waiter/param :health-check-interval-secs
                                                         :timeoutSeconds 1}
+                                        :name #waiter/param :k8s-name
                                         :ports [{:containerPort #waiter/param :port0}]
                                         :readinessProbe {:httpGet {:path #waiter/param :health-check-url
                                                                    :port #waiter/param :port0
