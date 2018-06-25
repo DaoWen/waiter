@@ -187,7 +187,7 @@
 
 (defn- get-services
   "Get all Waiter Services (reified as ReplicaSets) running in this Kubernetes cluster."
-  [{:keys [api-server-url http-client orchestrator-name] :as scheduler}]
+  [{:keys [api-server-url http-client orchestrator-name replicaset-api-version] :as scheduler}]
   (->> (str api-server-url "/apis/" replicaset-api-version
             "/replicasets?labelSelector=managed-by="
              orchestrator-name)
@@ -269,7 +269,7 @@
 
 (defn- build-replicaset-url
   "Build the URL for the given Waiter Service's ReplicaSet."
-  [{:keys [api-server-url]} {:keys [namespace k8s-name]}]
+  [{:keys [api-server-url replicaset-api-version]} {:keys [namespace k8s-name]}]
   (str api-server-url "/apis/" replicaset-api-version
        "/namespaces/" namespace "/replicasets/" k8s-name))
 
@@ -383,7 +383,7 @@
 
 (defn- create-service
   "Reify a Waiter Service as a Kubernetes ReplicaSet."
-  [service-id descriptor {:keys [api-server-url http-client] :as scheduler} service-id->password-fn]
+  [service-id descriptor {:keys [api-server-url http-client replicaset-api-version] :as scheduler} service-id->password-fn]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
         spec-json (service-spec scheduler service-id service-description service-id->password-fn)
         request-url (str api-server-url "/apis/" replicaset-api-version "/namespaces/"
@@ -434,6 +434,7 @@
                                 max-name-length
                                 orchestrator-name
                                 pod-base-port
+                                replicaset-api-version
                                 replicaset-spec-file-path
                                 service-id->failed-instances-transient-store
                                 service-id->service-description-fn]
