@@ -57,7 +57,7 @@
 ;; Kubernetes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen.
 (def ^:const pod-unique-suffix-length 5)
 
-(defn- service-id->k8s-name [{:keys [max-name-length] :as scheduler} service-id]
+(defn- service-id->k8s-app-name [{:keys [max-name-length] :as scheduler} service-id]
   "Shorten a full Waiter service-id to a Kubernetes-compatible application name.
    May return the service-id unmodified if it doesn't violate the
    configured name-length restrictions for this Kubernetes cluster."
@@ -80,10 +80,10 @@
   (let [requested (get spec :replicas 0)
         staged (- (+ availableReplicas unavailableReplicas) replicas)]
     (scheduler/make-Service
-      {:k8s-name name
-       :id waiter-service-id
+      {:id waiter-service-id
        :instances requested
-       :namespace namespace
+       :k8s/app-name name
+       :k8s/namespace namespace
        :task-count replicas
        :task-stats {:healthy readyReplicas
                     :running replicas
@@ -140,18 +140,19 @@
   (try
     (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
       (scheduler/make-ServiceInstance
-        {:k8s-name (get-in pod [:metadata :labels :app])
+        {
          :extra-ports (->> (get-in pod [:metadata :annotations :waiter-port-count])
                            Integer/parseInt range next (mapv #(+ port0 %)))
          :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
          :host (get-in pod [:status :podIP])
          :id (pod->instance-id pod)
          :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
-         :namespace (get-in pod [:metadata :namespace])
-         :pod-name (get-in pod [:metadata :name])
+         :k8s/app-name (get-in pod [:metadata :labels :app])
+         :k8s/namespace (get-in pod [:metadata :namespace])
+         :k8s/pod-name (get-in pod [:metadata :name])
+         :k8s/restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
          :port port0
          :protocol (get-in pod [:metadata :annotations :waiter-protocol])
-         :restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
          :service-id (get-in pod [:metadata :annotations :waiter-service-id])
          :started-at (-> pod
                          (get-in [:status :startTime])
@@ -197,12 +198,13 @@
 
 (defn- get-replicaset-pods
   "Get all Kubernetes pods associated with the given Waiter Service's corresponding ReplicaSet."
-  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler} {:keys [k8s-name namespace]}]
+  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler}
+   {:keys [k8s/app-name k8s/namespace]}]
   (->> (str api-server-url
             "/api/v1/namespaces/"
             namespace
             "/pods?labelSelector=app="
-            k8s-name)
+            app-name)
        (api-request http-client)
        :items))
 
@@ -269,9 +271,9 @@
 
 (defn- build-replicaset-url
   "Build the URL for the given Waiter Service's ReplicaSet."
-  [{:keys [api-server-url replicaset-api-version]} {:keys [namespace k8s-name]}]
+  [{:keys [api-server-url replicaset-api-version]} {:keys [k8s/app-name k8s/namespace]}]
   (str api-server-url "/apis/" replicaset-api-version
-       "/namespaces/" namespace "/replicasets/" k8s-name))
+       "/namespaces/" namespace "/replicasets/" app-name))
 
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
@@ -352,7 +354,7 @@
                                {:name k :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i) :value (str (+ port0 i))})))
-        params (into {:k8s-name (service-id->k8s-name scheduler service-id)
+        params (into {:k8s-name (service-id->k8s-app-name scheduler service-id)
                       :backend-protocol backend-proto
                       :backend-protocol-caps (string/upper-case backend-proto)
                       :cmd cmd
@@ -399,7 +401,7 @@
   "Delete the Kubernetes ReplicaSet corresponding to a Waiter Service.
    Ensures that all controlled Pods are deleted before removing the ReplicaSet.
    This operation will leave Waiter in a sane state on a failure."
-  [{:keys [api-server-url http-client] :as scheduler} service]
+  [{:keys [api-server-url http-client] :as scheduler} {:keys [id] :as service}]
   (let [replicaset-url (build-replicaset-url scheduler service)]
     (patch-object-json replicaset-url http-client
                        [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
@@ -408,7 +410,7 @@
       (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
         (api-request http-client pod-url :request-method :delete)))
     (api-request http-client replicaset-url :request-method :delete)
-    {:message (str "Kubernetes deleted ReplicaSet for " (:k8s-name service))
+    {:message (str "Kubernetes deleted ReplicaSet for " id)
      :result :deleted}))
 
 (defn service-id->service
@@ -421,7 +423,7 @@
     (let [replicasets (->> (str api-server-url "/apis/" replicaset-api-version
                                 "/namespaces/" service-ns
                                 "/replicasets?labelSelector=managed-by=" orchestrator-name
-                                ",app=" (service-id->k8s-name scheduler service-id))
+                                ",app=" (service-id->k8s-app-name scheduler service-id))
                            (api-request http-client)
                            :items)]
       (when (seq replicasets)
@@ -452,10 +454,10 @@
   (get-instances [this service-id]
     (instances-breakdown this
                          {:id service-id
-                          :k8s-name (service-id->k8s-name this service-id)
-                          :namespace (-> service-id
-                                         service-id->service-description-fn
-                                         (get "run-as-user"))}))
+                          :k8s/app-name (service-id->k8s-app-name this service-id)
+                          :k8s/namespace (-> service-id
+                                             service-id->service-description-fn
+                                             (get "run-as-user"))}))
 
   (kill-instance [this {:keys [id service-id] :as instance}]
     (ss/try+
