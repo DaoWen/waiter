@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import datetime
 import http.server
 import itertools
 import json
@@ -10,6 +11,7 @@ import threading
 import time
 import socketserver
 import urllib.parse
+import uuid
 import zlib
 
 def split2(string, delimiter, *options, default=None):
@@ -19,12 +21,25 @@ def split2(string, delimiter, *options, default=None):
         components = (components + [default, default])[:2]
     return components
 
+def run_after_ms(millis_delay, f, *args, **kwargs):
+    threading.Timer(millis_delay / 1000.0, f, args, kwargs).start()
+
+
 lorem_ipsum = b'Lorem ipsum dolor sit amet, proin in nibh tellus penatibus, viverra nunc risus ligula proin ligula.'
 
 max_response_size = 50000000  # 50MB
 default_chunk_size = 1024
 
-class JayJay(http.server.BaseHTTPRequestHandler):
+_async_state_lock = threading.Lock()
+_async_state = {}
+
+_counter_lock = threading.Lock()
+_pending_http_requests = 0
+_total_http_requests = 0
+_pending_ws_requests = 0
+_total_ws_requests = 0
+
+class Kitchen(http.server.BaseHTTPRequestHandler):
     def do_COPY(self):
         self.__handle_request('copy')
 
@@ -50,13 +65,24 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         self.__handle_request('put')
 
     def __handle_request(self, method):
+        global _pending_http_requests, _total_http_requests
+        with _counter_lock:
+            _pending_http_requests += 1
+            _total_http_requests += 1
+
         # Defaults
+        self.__async_req = None
         self.__chunked = False
         self.__chunk_size = default_chunk_size
         self.__cookies = {}
         self.__data_transform = None
+        self.__excluded_headers = set()
         self.__exit_process = False
-        self.__headers = {'Connection': 'close', 'Content-Type': 'text/plain'}
+        self.__headers = {
+                'Connection': 'close',
+                'Content-Type': 'text/plain',
+                'x-cid': self.headers.get('x-cid') or str(uuid.uuid4())
+                }
         self.__method = method
         self.__path = None
         self.__query = None
@@ -69,15 +95,26 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         self.__process_path()
         self.__process_headers()
 
-        # Optionally transform response bytes
+        # Handle async resource requests
+        if self.__async_req is not None:
+            if self.__async_req['type'] == 'create':
+                self.__resource_async_create()
+            elif self.__async_req['type'] == 'status':
+                self.__resource_async_status()
+            elif self.__async_req['type'] == 'result':
+                self.__resource_async_result()
+
+        # Optionally transform (e.g., compress) response bytes
         response_bytes = self.__response_bytes
         if self.__data_transform is not None:
             response_bytes = itertools.islice(response_bytes, self.__response_length)
             response_bytes = self.__data_transform(bytes(response_bytes))
             self.__response_length = len(response_bytes)
 
-        # Handle content length / chunking
-        if self.__chunked:
+        # Handle no content / content length / chunking
+        if self.__status == 204:
+            response_bytes = None  # HTTP 204 No Content
+        elif self.__chunked:
             self.__headers['Transfer-Encoding'] = 'chunked'
             if self.__chunk_size <= 0:
                 self.__chunk_size = default_chunk_size
@@ -92,44 +129,62 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             v = urllib.parse.quote_plus(v)
             self.send_header('Set-Cookie', '{}={}'.format(k, v))
         for k, v in self.__headers.items():
-            self.send_header(k, v)
+            if k.lower() not in self.__excluded_headers:
+                self.send_header(k, v)
         self.end_headers()
 
-        # Handle response length and truncation from failures
-        actual_response_length = min(self.__truncated_length, self.__response_length)
-        response_bytes = itertools.islice(self.__response_bytes, actual_response_length)
+        if response_bytes is not None:
 
-        # Send response body
-        bytes_written = 0
-        while True:
-            chunk = bytes(itertools.islice(response_bytes, self.__chunk_size))
-            if len(chunk) == 0:
-                if self.__chunked:
-                    self.wfile.write(b'0\r\n\r\n')
-                break
-            else:
-                if self.__chunked:
-                    chunk_header = '{:X}\r\n'.format(len(chunk))
-                    self.wfile.write(chunk_header.encode('ascii'))
-                self.wfile.write(chunk)
-                bytes_written += len(chunk)
-                if bytes_written == self.__truncated_length:
+            # Handle response length and truncation from failures
+            actual_response_length = min(self.__truncated_length, self.__response_length)
+            response_bytes = itertools.islice(self.__response_bytes, actual_response_length)
+
+            # Send response body
+            bytes_written = 0
+            while True:
+                chunk = bytes(itertools.islice(response_bytes, self.__chunk_size))
+                if len(chunk) == 0:
+                    if self.__chunked:
+                        self.wfile.write(b'0\r\n\r\n')
                     break
-                if self.__chunked:
-                    self.wfile.write(b'\r\n')
-                self.wfile.flush()
+                else:
+                    if self.__chunked:
+                        chunk_header = '{:X}\r\n'.format(len(chunk))
+                        self.wfile.write(chunk_header.encode('ascii'))
+                    self.wfile.write(chunk)
+                    bytes_written += len(chunk)
+                    if bytes_written == self.__truncated_length:
+                        break
+                    if self.__chunked:
+                        self.wfile.write(b'\r\n')
+                    self.wfile.flush()
 
         # Optionally trigger a fatal server error (exit)
         if self.__exit_process:
             self.__terminate('failure header')
 
+        with _counter_lock:
+            _pending_http_requests -= 1
+
     def __process_headers(self):
         assert self.__path is not None, 'Processes headers AFTER processing the request path.'
+
+        # Asynchronous resource request id
+        cancel_204 = self.headers.get('x-kitchen-204-on-async-cancel')
+        if cancel_204 and self.__async_req:
+            if cancel_204.lower() == 'false':
+                self.__async_req['cancel_code'] = 200
 
         # Send "busy" response code
         act_busy = self.headers.get('x-kitchen-act-busy')
         if act_busy is not None:
             self.__status = 503
+
+        # Asynchronous resource request id
+        allow_cancel = self.headers.get('x-kitchen-allow-async-cancel')
+        if allow_cancel and self.__async_req:
+            if allow_cancel.lower() == 'false':
+                self.__async_req['disallow_cancel'] = True
 
         # Chunk encoding
         if self.headers.get('x-kitchen-chunked') is not None:
@@ -150,7 +205,10 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         delay_value = self.headers.get('x-kitchen-delay-ms')
         if delay_value:
             delay_ms = int(delay_value)
-            time.sleep(delay_ms / 1000.0)
+            if self.__async_req:
+                self.__async_req['delay-ms'] = delay_ms
+            else:
+                time.sleep(delay_ms / 1000.0)
 
         # Kill this server (after some delay)
         die_value = self.headers.get('x-kitchen-die-after-ms')
@@ -158,16 +216,31 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             termination_delay_ms = int(die_value)
             if termination_delay_ms >= 0:
                 source = 'header after {} milliseconds'.format(termination_delay_ms)
-                threading.Timer(termination_delay_ms / 1000.0, self.__terminate, source)
+                run_after_ms(termination_delay_ms, self.__terminate, source)
 
         # Echo request body back to client
         if self.headers.get('x-kitchen-echo') is not None:
             post_bytes_count = int(self.headers.get('content-length', 0))
             self.__set_response(self.rfile.read(post_bytes_count))
 
+        # Exclude some headers from response
+        excluded_headers = self.headers.get('x-kitchen-exclude-headers')
+        if excluded_headers:
+            self.__excluded_headers = set(x.lower() for x in excluded_headers.split(','))
+
+        # Response payload length
+        truncated_size = self.headers.get('x-kitchen-fail-after')
+        if truncated_size:
+            self.__truncated_length = int(truncated_size)
+
         # Kill the whole server on failure
         if self.headers.get('x-kitchen-fail-by-terminating-jvm') is not None:
             self.__exit_process = True
+
+        # Asynchronous resource request id
+        req_id = self.headers.get('x-kitchen-request-id')
+        if req_id and self.__async_req:
+            self.__async_req['id'] = req_id
 
         # Response payload length
         response_size = self.headers.get('x-kitchen-response-size')
@@ -175,9 +248,9 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             self.__response_length = int(response_size)
 
         # Response payload length
-        truncated_size = self.headers.get('x-kitchen-fail-after')
-        if truncated_size:
-            self.__truncated_length = int(truncated_size)
+        async_expire_ms = self.headers.get('x-kitchen-store-async-response-ms')
+        if async_expire_ms and self.__async_req:
+            self.__async_req['expire-ms'] = int(async_expire_ms)
 
     def __process_path(self):
         path, query_string = split2(self.path, '?', 1)
@@ -189,7 +262,26 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         else:
             query_params = {}
 
-        if path == '/bad-status':
+        if path == '/async/request':
+            self.__async_req = {
+                    'delay-ms': 20000,
+                    'expire-ms': 10000,
+                    'type': 'create'
+                    }
+
+        if path == '/async/status':
+            self.__async_req = {
+                    'id': query_params.get('request-id'),
+                    'type': 'status'
+                    }
+
+        if path == '/async/result':
+            self.__async_req = {
+                    'id': query_params.get('request-id'),
+                    'type': 'result'
+                    }
+
+        elif path == '/bad-status':
             self.__status = int(query_params.get('status', 500))
 
         elif path == '/chunked':
@@ -208,6 +300,9 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             self.__data_transform = zlib.compress
             self.__headers['Content-Encoding'] = 'gzip'
             self.__set_response(itertools.cycle(lorem_ipsum), max_response_size)
+
+        elif path == '/kitchen-state':
+            self.__state()
 
         elif path == '/request-info':
             info = { 'request-method': self.__method, 'uri': path }
@@ -230,6 +325,87 @@ class JayJay(http.server.BaseHTTPRequestHandler):
             # Set default response
             self.__set_response(b'Hello World')
 
+    def __resource_async_create(self):
+        req_id = self.__async_req.get('id') or str(uuid.uuid4())
+        delay_ms = self.__async_req['delay-ms']
+        expire_ms = self.__async_req['expire-ms']
+        now = datetime.datetime.now()
+        expire_time = now + datetime.timedelta(milliseconds=expire_ms)
+        req_meta_data = {
+                'cid': self.__headers['x-cid'],
+                'done': False,
+                'expires': expire_time.isoformat(),
+                'linger-ms': expire_ms,
+                'processing-time': delay_ms,
+                'received': now.isoformat()
+                }
+
+        with _async_state_lock:
+            _async_state[req_id] = req_meta_data
+
+        def async_complete_callback():
+            with _async_state_lock:
+                _async_state[req_id]['done'] = True
+            run_after_ms(expire_ms, self.__resource_async_delete, req_id)
+
+        run_after_ms(delay_ms, async_complete_callback)
+
+        self.__status = 202
+        self.__headers['x-kitchen-request-id'] = req_id
+        self.__headers['Location'] = '/async/status?request-id={}'.format(req_id)
+        self.__set_response('Accepted request {}'.format(req_id).encode('utf-8'))
+
+
+    def __resource_async_delete(self, req_id):
+        with _async_state_lock:
+            if req_id in _async_state:
+                del _async_state[req_id]
+
+    def __resource_async_status(self):
+        req_id = self.__async_req.get('id')
+        if req_id is None:
+            self.__status = 400
+            self.__set_response(b'Missing request-id')
+        else:
+            with _async_state_lock:
+                req_data = _async_state.get(req_id)
+            if req_data is None:
+                self.__status = 410
+                msg = 'No data found for request-id {}'.format(req_id)
+                self.__set_response(msg.encode('utf-8'))
+            elif self.__method == 'delete':
+                if self.__async_req.get('disallow_cancel'):
+                    self.__status = 405
+                    self.__set_response(b'Cancellation not supported!')
+                else:
+                    self.__resource_async_delete(req_id)
+                    self.__status = self.__async_req.get('cancel_code', 204)
+                    msg = 'Deleted request-id {}'.format(req_id)
+                    self.__set_response(msg.encode('utf-8'))
+            else:
+                req_done = req_data and req_data['done']
+                if req_done:
+                    self.__status = 303
+                    self.__headers['Location'] = '/async/result?request-id={}'.format(req_id)
+                    msg = 'Processing complete for request-id {}'.format(req_id)
+                    self.__set_response(msg.encode('utf-8'))
+                else:
+                    msg = 'Still processing request-id {}'.format(req_id)
+                    self.__set_response(msg.encode('utf-8'))
+
+    def __resource_async_result(self):
+        req_id = self.__async_req.get('id')
+        if req_id is None:
+            self.__status = 400
+            self.__set_response(b'Missing request-id')
+        else:
+            with _async_state_lock:
+                req_data = _async_state.get(req_id, {})
+            if not req_data:
+                self.__status = 404
+            response_json = json.dumps({'status': self.__status, **req_data})
+            self.__headers['Content-Type'] = 'application/json'
+            self.__set_response(response_json.encode('utf-8'))
 
     def __set_response(self, response_bytes, response_length=None):
         self.__response_bytes = response_bytes
@@ -240,12 +416,25 @@ class JayJay(http.server.BaseHTTPRequestHandler):
         # Limit response length to the maximum supported size
         self.__response_length = min(max_response_size, self.__response_length)
 
+    def __state(self):
+        with _async_state_lock, _counter_lock:
+            state = {
+                'async-requests': _async_state,
+                'pending-http-requests': _pending_http_requests,
+                'pending-ws-requests': _pending_ws_requests,
+                'total-http-requests': _total_http_requests,
+                'total-ws-requests': _total_ws_requests
+                }
+        self.__headers['Content-Type'] = 'application/json'
+        self.__set_response(json.dumps(state, sort_keys=True).encode('utf-8'))
+
     def __terminate(self, source):
         print('Killed by {}'.format(source), file=sys.stderr)
         os._exit(1)
 
 class MultiThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Serve each HTTP request on separate thread"""
+    pass
 
 if __name__ == '__main__':
 
@@ -260,9 +449,9 @@ if __name__ == '__main__':
 
     print("Starting server on port {}...".format(args.port))
 
-    jayjay = MultiThreadedServer(('', args.port), JayJay)
+    kitchen = MultiThreadedServer(('', args.port), Kitchen)
 
     try:
-        jayjay.serve_forever()
+        kitchen.serve_forever()
     except KeyboardInterrupt:
-        jayjay.server_close()
+        kitchen.server_close()
