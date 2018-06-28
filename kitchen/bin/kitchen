@@ -441,17 +441,22 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Mock HTTP Service')
     parser.add_argument('-p', '--port', metavar='PORT_NUMBER', type=int, default=8080, help='Server port number')
     parser.add_argument('--start-up-sleep-ms', metavar='MILLIS', type=int, default=0, help='Delay before starting server')
+    parser.add_argument('--websockets', action='store_true', help='Start server in WebSockets mode')
     args = parser.parse_args()
 
     if args.start_up_sleep_ms > 0:
         print("Sleeping for {}ms...".format(args.start_up_sleep_ms))
         time.sleep(args.start_up_sleep_ms / 1000.0)
 
-    print("Starting server on port {}...".format(args.port))
+    # WebSockets server
+    if args.websockets:
+        print("Starting WebSockets server on port {}...".format(args.port))
 
-    kitchen = MultiThreadedServer(('', args.port), Kitchen)
-
-    try:
-        kitchen.serve_forever()
-    except KeyboardInterrupt:
-        kitchen.server_close()
+    # HTTP/1.1 Server
+    else:
+        print("Starting HTTP server on port {}...".format(args.port))
+        kitchen = MultiThreadedServer(('', args.port), Kitchen)
+        try:
+            kitchen.serve_forever()
+        except KeyboardInterrupt:
+            kitchen.server_close()
