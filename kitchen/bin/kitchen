@@ -22,7 +22,17 @@ def split2(string, delimiter, *options, default=None):
     return components
 
 def run_after_ms(millis_delay, f, *args, **kwargs):
+    """Asynchronousely execute function `f(*args, **kwargs)` after millis_delay."""
     threading.Timer(millis_delay / 1000.0, f, args, kwargs).start()
+
+def request_info(method, headers, path, query_string):
+    """Build request-info endpoint dict data JSON response."""
+    info = { 'request-method': method, 'uri': path }
+    if len(headers) > 0:
+        info['headers'] = { k.lower(): v for k, v in headers.items() }
+    if query_string is not None:
+        info['query-string'] = query_string
+    return json.dumps(info, sort_keys=True).encode('utf-8')
 
 def terminate(source):
     print('Killed by {}'.format(source), file=sys.stderr)

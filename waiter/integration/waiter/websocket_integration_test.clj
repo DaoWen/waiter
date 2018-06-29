@@ -68,7 +68,7 @@
   (testing-using-waiter-url
     (let [auth-cookie-value (auth-cookie waiter-url)
           ws-response-atom (atom [])
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            "x-waiter-metric-group" "test-ws-support"
                            "x-waiter-name" (rand-name))]
       (is auth-cookie-value)
@@ -103,12 +103,12 @@
           metrics-sync-interval-ms (get-in waiter-settings [:metrics-config :metrics-sync-interval-ms])
           inter-request-interval-ms (+ metrics-sync-interval-ms 1000)
           auth-cookie-value (auth-cookie waiter-url)
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            :x-waiter-metric-group "test-ws-support"
                            :x-waiter-name (rand-name))
-          _ (make-kitchen-request waiter-url waiter-headers :method :get)
+          _ (make-kitchen-ws-request waiter-url waiter-headers :method :get)
           {:keys [headers service-id] :as canary-response}
-          (make-request-with-debug-info waiter-headers #(make-kitchen-request waiter-url % :method :get))
+          (make-request-with-debug-info waiter-headers #(make-kitchen-ws-request waiter-url % :method :get))
           _ (assert-response-status canary-response 200)
           first-request-time-header (-> (get headers "x-waiter-request-date")
                                         (du/str-to-date du/formatter-rfc822))
@@ -155,7 +155,7 @@
   (testing-using-waiter-url
     (let [auth-cookie-value (auth-cookie waiter-url)
           send-success-after-timeout-atom (atom true)
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            "x-waiter-metric-group" "test-ws-support"
                            "x-waiter-name" (rand-name))]
       (is auth-cookie-value)
@@ -188,7 +188,7 @@
   (testing-using-waiter-url
     (let [auth-cookie-value (auth-cookie waiter-url)
           send-success-after-timeout-atom (atom true)
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            "x-waiter-metric-group" "test-ws-support"
                            "x-waiter-name" (rand-name)
                            "x-waiter-max-instances" "1"
@@ -233,7 +233,7 @@
           auth-cookie-value (auth-cookie waiter-url)
           process-mem 1024
           kitchen-mem (- process-mem 64)
-          waiter-headers (-> (kitchen-request-headers)
+          waiter-headers (-> (kitchen-ws-request-headers)
                              (assoc :x-waiter-mem process-mem
                                     :x-waiter-metric-group "test-ws-support"
                                     :x-waiter-name (rand-name))
@@ -285,7 +285,7 @@
   (testing-using-waiter-url
     (let [auth-cookie-value (auth-cookie waiter-url)
           uncorrupted-data-streamed-atom (atom false)
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            "x-waiter-metric-group" "test-ws-support"
                            "x-waiter-name" (rand-name))]
       (is auth-cookie-value)
@@ -372,7 +372,7 @@
           _ (is auth-cookie-value)
           all-iteration-result-atom (atom {})
           concurrency-level 6
-          waiter-headers (assoc (kitchen-request-headers)
+          waiter-headers (assoc (kitchen-ws-request-headers)
                            "x-waiter-metric-group" "test-ws-support"
                            "x-waiter-name" (rand-name)
                            "x-waiter-concurrency-level" concurrency-level

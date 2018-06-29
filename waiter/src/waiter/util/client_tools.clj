@@ -316,11 +316,19 @@
    :mem 256
    :version "version-does-not-matter"})
 
+(defn kitchen-ws-params
+  []
+  (update-in (kitchen-params) [:cmd] #(str % " --websockets")))
+
 (defn kitchen-request-headers
-  [& {:keys [prefix] :or {prefix "x-waiter-"}}]
-  (->> (kitchen-params)
+  [& {:keys [prefix params-fn] :or {prefix "x-waiter-" params-fn kitchen-params}}]
+  (->> (params-fn)
        (pc/map-keys #(str prefix (name %)))
        (walk/keywordize-keys)))
+
+(defn kitchen-ws-request-headers
+  [& args]
+  (->> (apply kitchen-request-headers :params-fn kitchen-ws-params args)))
 
 (defn make-light-request
   [waiter-url custom-headers &
@@ -363,13 +371,13 @@
 (defn make-kitchen-request
   "Makes an on-the-fly request to the Kitchen test app."
   [waiter-url custom-headers &
-   {:keys [body cookies debug method path query-params]
-    :or {body nil cookies {} debug true method :post path "/endpoint" query-params {}}}]
+   {:keys [body cookies debug extra-cmd-args method path query-params]
+    :or {cookies {} debug true method :post path "/endpoint" query-params {}}}]
   {:pre [(not (str/blank? waiter-url))]}
   (make-shell-request
     waiter-url
     (merge
-      {:x-waiter-cmd (kitchen-cmd "-p $PORT0")
+      {:x-waiter-cmd (kitchen-cmd (str "-p $PORT0 " extra-cmd-args))
        :x-waiter-metric-group "waiter_kitchen"}
       custom-headers)
     :body body
@@ -378,6 +386,11 @@
     :method method
     :path path
     :query-params query-params))
+
+(defn make-kitchen-ws-request
+  "Makes an on-the-fly request to the Kitchen test app in WebSockets mode."
+  [& args]
+  (apply make-kitchen-request :extra-headers "--websockets" args))
 
 (defn retrieve-service-id [waiter-url waiter-headers & {:keys [verbose] :or {verbose false}}]
   (let [service-id-result (make-request waiter-url "/service-id" :headers waiter-headers)
