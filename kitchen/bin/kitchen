@@ -24,6 +24,9 @@ def split2(string, delimiter, *options, default=None):
 def run_after_ms(millis_delay, f, *args, **kwargs):
     threading.Timer(millis_delay / 1000.0, f, args, kwargs).start()
 
+def terminate(source):
+    print('Killed by {}'.format(source), file=sys.stderr)
+    os._exit(1)
 
 lorem_ipsum = b'Lorem ipsum dolor sit amet, proin in nibh tellus penatibus, viverra nunc risus ligula proin ligula.'
 
@@ -38,6 +41,12 @@ _pending_http_requests = 0
 _total_http_requests = 0
 _pending_ws_requests = 0
 _total_ws_requests = 0
+
+def make_default_response_headers(request_headers):
+    return {'Connection': 'close',
+            'Content-Type': 'text/plain',
+            'x-cid': request_headers.get('x-cid') or str(uuid.uuid4())
+            }
 
 class Kitchen(http.server.BaseHTTPRequestHandler):
     def do_COPY(self):
@@ -78,11 +87,7 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
         self.__data_transform = None
         self.__excluded_headers = set()
         self.__exit_process = False
-        self.__headers = {
-                'Connection': 'close',
-                'Content-Type': 'text/plain',
-                'x-cid': self.headers.get('x-cid') or str(uuid.uuid4())
-                }
+        self.__headers = make_default_response_headers(self.headers)
         self.__method = method
         self.__path = None
         self.__query = None
@@ -161,7 +166,7 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
 
         # Optionally trigger a fatal server error (exit)
         if self.__exit_process:
-            self.__terminate('failure header')
+            terminate('failure header')
 
         with _counter_lock:
             _pending_http_requests -= 1
@@ -216,7 +221,7 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
             termination_delay_ms = int(die_value)
             if termination_delay_ms >= 0:
                 source = 'header after {} milliseconds'.format(termination_delay_ms)
-                run_after_ms(termination_delay_ms, self.__terminate, source)
+                run_after_ms(termination_delay_ms, terminate, source)
 
         # Echo request body back to client
         if self.headers.get('x-kitchen-echo') is not None:
@@ -289,7 +294,7 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
             self.__set_response(itertools.cycle(lorem_ipsum), max_response_size)
 
         elif path == '/die':
-            self.__terminate('/die endpoint')
+            terminate('/die endpoint')
 
         elif path == '/environment':
             env = { k: v for k, v in os.environ.items() if 'password' not in k.lower() }
@@ -428,13 +433,57 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
         self.__headers['Content-Type'] = 'application/json'
         self.__set_response(json.dumps(state, sort_keys=True).encode('utf-8'))
 
-    def __terminate(self, source):
-        print('Killed by {}'.format(source), file=sys.stderr)
-        os._exit(1)
-
 class MultiThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Serve each HTTP request on separate thread"""
     pass
+
+def start_http_server(args):
+    """Start HTTP/1.1 server using command-line arguments."""
+    print("Starting HTTP server on port {}...".format(args.port))
+    kitchen = MultiThreadedServer(('', args.port), Kitchen)
+    try:
+        kitchen.serve_forever()
+    except KeyboardInterrupt:
+        kitchen.server_close()
+
+def start_websockets_server(args):
+    """Start WebSockets server using command-line arguments."""
+    print("Starting WebSockets server on port {}...".format(args.port))
+
+    import asyncio
+
+    try:
+        import websockets
+        import websockets.compatibility
+    except ImportError:
+        sys.exit('Missing websockets package.')
+
+    class WSSP(websockets.server.WebSocketServerProtocol):
+        @asyncio.coroutine
+        def process_request(self, path, request_headers):
+            if request_headers.get('Upgrade') != 'websocket':
+                if path.startswith('/die'):
+                    terminate('WebSocket /die endpoint')
+                else:
+                    msg = b'HTTP OK\n'
+                    headers = make_default_response_headers(request_headers)
+                    headers['Content-Length'] = len(msg)
+                    return websockets.compatibility.OK, sorted(headers.items()), msg
+
+    @asyncio.coroutine
+    def hello(websocket, path):
+        name = yield from websocket.recv()
+        print("< {}".format(name))
+
+        greeting = "Hello {}!".format(name)
+
+        yield from websocket.send(greeting)
+        print("> {}".format(greeting))
+
+    start_server = websockets.serve(hello, '', args.port, create_protocol=WSSP)
+
+    asyncio.get_event_loop().run_until_complete(start_server)
+    asyncio.get_event_loop().run_forever()
 
 if __name__ == '__main__':
 
@@ -448,15 +497,7 @@ if __name__ == '__main__':
         print("Sleeping for {}ms...".format(args.start_up_sleep_ms))
         time.sleep(args.start_up_sleep_ms / 1000.0)
 
-    # WebSockets server
     if args.websockets:
-        print("Starting WebSockets server on port {}...".format(args.port))
-
-    # HTTP/1.1 Server
+        start_websockets_server(args)
     else:
-        print("Starting HTTP server on port {}...".format(args.port))
-        kitchen = MultiThreadedServer(('', args.port), Kitchen)
-        try:
-            kitchen.serve_forever()
-        except KeyboardInterrupt:
-            kitchen.server_close()
+        start_http_server(args)
