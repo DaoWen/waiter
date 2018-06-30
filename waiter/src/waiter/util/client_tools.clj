@@ -389,8 +389,8 @@
 
 (defn make-kitchen-ws-request
   "Makes an on-the-fly request to the Kitchen test app in WebSockets mode."
-  [& args]
-  (apply make-kitchen-request :extra-headers "--websockets" args))
+  [waiter-url custom-headers & args]
+  (apply make-kitchen-request waiter-url custom-headers :extra-cmd-args "--websockets" args))
 
 (defn retrieve-service-id [waiter-url waiter-headers & {:keys [verbose] :or {verbose false}}]
   (let [service-id-result (make-request waiter-url "/service-id" :headers waiter-headers)

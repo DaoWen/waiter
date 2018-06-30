@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
 import datetime
 import http.server
 import itertools
 import json
+import logging
 import os
 import sys
 import threading
@@ -32,16 +34,28 @@ def request_info(method, headers, path, query_string):
         info['headers'] = { k.lower(): v for k, v in headers.items() }
     if query_string is not None:
         info['query-string'] = query_string
-    return json.dumps(info, sort_keys=True).encode('utf-8')
+    return json.dumps(info, sort_keys=True)
 
 def terminate(source):
-    print('Killed by {}'.format(source), file=sys.stderr)
+    """Forcefully terminate this server process."""
+    logger.info('Killed by {}'.format(source))
     os._exit(1)
+
+def check_auth(path, auth_string):
+    """Validate user authentication credentials, with exceptions for excluded endpoints."""
+    if _auth_handler is None:
+        return True
+    elif path in ['/bad-status', '/sleep', '/status']:
+        return True
+    else:
+        return auth_string and _auth_handler(auth_string)
 
 lorem_ipsum = b'Lorem ipsum dolor sit amet, proin in nibh tellus penatibus, viverra nunc risus ligula proin ligula.'
 
 max_response_size = 50000000  # 50MB
 default_chunk_size = 1024
+
+_auth_handler = None
 
 _async_state_lock = threading.Lock()
 _async_state = {}
@@ -272,6 +286,11 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
         self.__path = path
         self.__query = query_string
 
+        if not check_auth(path, self.headers.get('Authorization')):
+            self.__status = 403
+            self.__set_response(b'HTTP 403 - Forbidden\n')
+            return
+
         if query_string:
             query_params = dict(split2(param, '=', 1) for param in query_string.split('&'))
         else:
@@ -320,13 +339,9 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
             self.__state()
 
         elif path == '/request-info':
-            info = { 'request-method': self.__method, 'uri': path }
-            if len(self.headers) > 0:
-                info['headers'] = { k.lower(): v for k, v in self.headers.items() }
-            if query_string is not None:
-                info['query-string'] = query_string
-            self.__set_response(json.dumps(info, sort_keys=True).encode('utf-8'))
             self.__headers['Content-Type'] = 'application/json'
+            info = request_info(self.__method, self.headers, path, query_string)
+            self.__set_response(info.encode('utf-8'))
 
         elif path == '/sleep':
             self.__status = int(query_params.get('status', 200))
@@ -447,9 +462,16 @@ class MultiThreadedServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     """Serve each HTTP request on separate thread"""
     pass
 
+class BasicAuthHandler():
+    def __init__(self, username, password):
+        b64_creds = base64.b64encode(':'.join([username, password]).encode('utf-8'))
+        self.expected_auth = 'Basic {}'.format(b64_creds.decode())
+    def __call__(self, auth_string):
+        return auth_string == self.expected_auth
+
 def start_http_server(args):
     """Start HTTP/1.1 server using command-line arguments."""
-    print("Starting HTTP server on port {}...".format(args.port))
+    logger.info('Starting HTTP server on port {}...'.format(args.port))
     kitchen = MultiThreadedServer(('', args.port), Kitchen)
     try:
         kitchen.serve_forever()
@@ -458,13 +480,14 @@ def start_http_server(args):
 
 def start_websockets_server(args):
     """Start WebSockets server using command-line arguments."""
-    print("Starting WebSockets server on port {}...".format(args.port))
+    logger.info('Starting WebSockets server on port {}...'.format(args.port))
 
     import asyncio
 
     try:
         import websockets
         import websockets.compatibility
+        import websockets.exceptions
     except ImportError:
         sys.exit('Missing websockets package.')
 
@@ -481,16 +504,35 @@ def start_websockets_server(args):
                     return websockets.compatibility.OK, sorted(headers.items()), msg
 
     @asyncio.coroutine
-    def hello(websocket, path):
-        name = yield from websocket.recv()
-        print("< {}".format(name))
+    def ws_handler(websocket, full_path):
+        global _pending_ws_requests, _total_ws_requests
 
-        greeting = "Hello {}!".format(name)
+        path, query_string = split2(full_path, '?', 1)
 
-        yield from websocket.send(greeting)
-        print("> {}".format(greeting))
+        with _counter_lock:
+            _pending_ws_requests += 1
+            _total_ws_requests += 1
 
-    start_server = websockets.serve(hello, '', args.port, create_protocol=WSSP)
+        try:
+            yield from websocket.send('Connected to kitchen')
+
+            while True:
+                in_data = yield from websocket.recv()
+                logger.debug('Got data on websocket: {}'.format(in_data))
+
+                if in_data == 'request-info':
+                    info = request_info('websocket', websocket.request_headers, path, query_string)
+                    yield from websocket.send(info)
+
+                else:
+                    yield from websocket.send(in_data)
+
+        except websockets.exceptions.ConnectionClosed:
+            with _counter_lock:
+                _pending_ws_requests -= 1
+
+
+    start_server = websockets.serve(ws_handler, '', args.port, create_protocol=WSSP)
 
     asyncio.get_event_loop().run_until_complete(start_server)
     asyncio.get_event_loop().run_forever()
@@ -503,8 +545,19 @@ if __name__ == '__main__':
     parser.add_argument('--websockets', action='store_true', help='Start server in WebSockets mode')
     args = parser.parse_args()
 
+    logging.basicConfig(filename='kitchen.log', level=logging.INFO)
+    logger = logging.getLogger('kitchen')
+    logger.setLevel(logging.DEBUG)
+
+    username = os.environ.get('WAITER_USERNAME')
+    password = os.environ.get('WAITER_PASSWORD')
+
+    if username and password:
+        logger.info('Basic Authentication Enabled')
+        _auth_handler = BasicAuthHandler(username, password)
+
     if args.start_up_sleep_ms > 0:
-        print("Sleeping for {}ms...".format(args.start_up_sleep_ms))
+        logger.info('Sleeping for {}ms...'.format(args.start_up_sleep_ms))
         time.sleep(args.start_up_sleep_ms / 1000.0)
 
     if args.websockets:
