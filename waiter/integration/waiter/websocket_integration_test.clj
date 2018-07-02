@@ -232,14 +232,12 @@
           ws-max-text-message-size' (+ 2048 ws-max-text-message-size)
           auth-cookie-value (auth-cookie waiter-url)
           process-mem 1024
-          kitchen-mem (- process-mem 64)
           waiter-headers (-> (kitchen-ws-request-headers)
                              (assoc :x-waiter-mem process-mem
                                     :x-waiter-metric-group "test-ws-support"
                                     :x-waiter-name (rand-name))
                              (update :x-waiter-cmd
                                      (fn [cmd] (str cmd ;; on-the-fly doesn't support x-waiter-env
-                                                    (str " --mem " kitchen-mem "M")
                                                     " --ws-max-binary-message-size " ws-max-binary-message-size'
                                                     " --ws-max-text-message-size " ws-max-text-message-size'))))
           middleware (fn middleware [_ ^UpgradeRequest request]
@@ -292,7 +290,7 @@
       (try
         (let [response-promise (promise)
               ^WebSocketClient websocket-client (websocket-client-factory)
-              message-length 2000000 ;; jetty default is 65536
+              message-length 2000000 ;; 2MB, jetty default is 64KiB
               max-message-length (+ 1024 message-length)]
           (update-max-message-sizes websocket-client max-message-length max-message-length)
           (ws-client/connect!
@@ -307,7 +305,7 @@
                 (let [backend-string (async/<! in)]
                   (async/>! out (.getBytes (str backend-string) "utf-8"))
                   (let [^ByteBuffer backend-bytes (async/<! in)
-                        bytes-string (-> backend-bytes (.array) (String. "utf-8"))]
+                        bytes-string (some-> backend-bytes (.array) (String. "utf-8"))]
                     (reset! uncorrupted-data-streamed-atom
                             (and (= message-length (count backend-string)) (= backend-string bytes-string)))))
                 (async/>! out "exit")
