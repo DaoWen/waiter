@@ -46,17 +46,8 @@ def request_info(method, headers, path, query_string):
 
 def terminate(source):
     """Forcefully terminate this server process."""
-    logger.info('Killed by {}'.format(source))
+    kitchen_logger.info('Killed by {}'.format(source))
     os._exit(1)
-
-def check_auth(path, auth_string):
-    """Validate user authentication credentials, with exceptions for excluded endpoints."""
-    if _auth_handler is None:
-        return True
-    elif path in ['/bad-status', '/sleep', '/status']:
-        return True
-    else:
-        return auth_string and _auth_handler(auth_string)
 
 def random_string(chars, result_size):
     """Return a string of length `result_size` of random characters from `chars`."""
@@ -99,7 +90,7 @@ class WebSocketError(Exception):
 class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
 
     _ws_GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
-    _opcode_continu = 0x0
+    _opcode_continuation = 0x0
     _opcode_text = 0x1
     _opcode_binary = 0x2
     _opcode_close = 0x8
@@ -120,11 +111,7 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         """Override this handler."""
         pass
 
-    def send_message(self, message, data_type='text'):
-        if data_type == 'text':
-            opcode = self._opcode_text
-        else:
-            opcode = self._opcode_binary
+    def send_message(self, message, opcode=_opcode_text):
         self._send_message(opcode, message)
 
     def setup(self):
@@ -150,9 +137,13 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             #do_GET only returns after client close or socket error.
             self._read_messages()
         else:
-            self.protocol_version = 'HTTP/1.0'
-            self.send_response(200)
-            self.end_headers()
+            self._empty_response(200)
+
+    def _empty_response(self, code):
+        self.send_response(code)
+        self.send_header('Connection', 'close')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
 
     def _read_messages(self):
         while self.connected == True:
@@ -171,7 +162,7 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         #self.rfile.read(n) is blocking.
         #it returns however immediately when the socket is closed.
         try:
-            self.opcode = ord(self.rfile.read(1)) & 0x0F
+            opcode = ord(self.rfile.read(1)) & 0x0F
             length = ord(self.rfile.read(1)) & 0x7F
             if length == 126:
                 length = struct.unpack(">H", self.rfile.read(2))[0]
@@ -181,8 +172,10 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             decoded = bytearray(self.rfile.read(length))
             for i in range(length):
                 decoded[i] ^= masks[i % 4]
-            self._on_message(decoded)
+            self._on_message(opcode, decoded)
         except (struct.error, TypeError) as e:
+            import traceback
+            traceback.print_exc()
             #catch exceptions from ord() and struct.unpack()
             if self.connected:
                 raise WebSocketError("Websocket read aborted while listening")
@@ -192,18 +185,20 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
                 pass
 
     def _send_message(self, opcode, message):
+        msg_header = bytearray()
         try:
             #use of self.wfile.write gives socket exception after socket is closed. Avoid.
-            self.request.send(bytes([0x80 + opcode]))
+            msg_header.append(0x80 + opcode)
             length = len(message)
             if length <= 125:
-                self.request.send(bytes([length]))
-            elif length >= 126 and length <= 65535:
-                self.request.send(bytes([126]))
-                self.request.send(struct.pack(">H", length))
+                msg_header.append(length)
+            elif 126 <= length <= 65535:
+                msg_header.append(126)
+                msg_header.extend(struct.pack(">H", length))
             else:
-                self.request.send(bytes([127]))
-                self.request.send(struct.pack(">Q", length))
+                msg_header.append(127)
+                msg_header.extend(struct.pack(">Q", length))
+            self.request.send(msg_header)
             # TODO - handle chunking and lazy generation
             if length > 0:
                 self.request.send(message)
@@ -251,11 +246,11 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         finally:
             self.mutex.release()
 
-    def _on_message(self, message):
-        #self.log_message("_on_message: opcode: %02X msg: %s" % (self.opcode, message))
+    def _on_message(self, opcode, message):
+        #self.log_message("_on_message: opcode: %02X msg: %s" % (opcode, message))
 
         # close
-        if self.opcode == self._opcode_close:
+        if opcode == self._opcode_close:
             self.connected = False
             #Terminate BaseHTTPRequestHandler.handle() loop:
             self.close_connection = 1
@@ -265,26 +260,25 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
                 pass
             self.on_ws_closed()
         # ping
-        elif self.opcode == self._opcode_ping:
+        elif opcode == self._opcode_ping:
             _send_message(self._opcode_pong, message)
         # pong
-        elif self.opcode == self._opcode_pong:
+        elif opcode == self._opcode_pong:
             pass
         # data
-        elif (self.opcode == self._opcode_continu or
-                self.opcode == self._opcode_text or
-                self.opcode == self._opcode_binary):
-            self.on_ws_message(message)
+        elif opcode in (self._opcode_continuation, self._opcode_text, self._opcode_binary):
+            self.on_ws_message(opcode, message)
 
-    def _send_close(self):
+    def _send_close(self, code=None, message=b''):
         #Dedicated _send_close allows for catch all exception handling
-        msg = bytearray()
-        msg.append(0x80 + self._opcode_close)
-        msg.append(0x00)
-        self.request.send(msg)
+        print('closing...')
+        if code is None:
+            self.request.send(bytes([0x80 | self._opcode_close, 0x00]))
+        else:
+            self._send_message(code, struct.pack(">H", code) + message)
 
 '''
-End MIT License Code
+End MIT Licensed Code
 '''
 
 def make_default_response_headers(request_headers):
@@ -293,32 +287,134 @@ def make_default_response_headers(request_headers):
             'x-cid': request_headers.get('x-cid') or str(uuid.uuid4())
             }
 
-class Kitchen(http.server.BaseHTTPRequestHandler):
+class Kitchen(HTTPWebSocketsHandler):
     def do_COPY(self):
-        self.__handle_request('copy')
+        self.do_http_action('copy')
 
     def do_DELETE(self):
-        self.__handle_request('delete')
+        self.do_http_action('delete')
 
     def do_GET(self):
-        self.__handle_request('get')
+        self.do_http_action('get')
 
     def do_HEAD(self):
-        self.__handle_request('head')
+        self.do_http_action('head')
 
     def do_MOVE(self):
-        self.__handle_request('move')
+        self.do_http_action('move')
 
     def do_PATCH(self):
-        self.__handle_request('patch')
+        self.do_http_action('patch')
 
     def do_POST(self):
-        self.__handle_request('post')
+        self.do_http_action('post')
 
     def do_PUT(self):
-        self.__handle_request('put')
+        self.do_http_action('put')
 
-    def __handle_request(self, method):
+    def do_http_action(self, method):
+        self.__method = method
+        self.__path, self.__query = split2(self.path, '?', 1)
+
+        if not self.__check_auth():
+            self._empty_response(403)
+
+        elif self.headers.get('Upgrade') == 'websocket':
+            self._handshake()
+            self._read_messages()
+
+        else:
+            self.__handle_http_request()
+
+    def on_ws_connected(self):
+        """Override this handler."""
+        global _pending_ws_requests, _total_ws_requests
+        with _counter_lock:
+            _pending_ws_requests += 1
+            _total_ws_requests += 1
+            self.__connection_id = _total_ws_requests
+        self.__logger = kitchen_logger.getChild('ws{:03d}'.format(self.__connection_id))
+        self.__logger.info('Opened WebSocket connection')
+        self.send_message(b'Connected to kitchen')
+
+    def on_ws_closed(self):
+        """Override this handler."""
+        global _pending_ws_requests
+        with _counter_lock:
+            _pending_ws_requests -= 1
+        self.__logger.info('Closed WebSocket connection')
+
+    def on_ws_message(self, opcode, in_data):
+        """Override this handler to process incoming websocket messages."""
+        if len(in_data) > 1000:
+            self.__logger.debug('Got data on websocket: <{}>'.format(len(in_data)))
+        else:
+            self.__logger.debug('Got data on websocket: {}'.format(in_data))
+
+        if opcode == self._opcode_binary:
+            self.send_message(in_data, opcode)
+            self.__logger.debug('Sent echo bytes response')
+
+        elif opcode == self._opcode_text:
+            # TODO kitchen-state
+            if in_data == b'request-info':
+                info = request_info('websocket', self.headers, self.__path, self.__query)
+                self.send_message(info.encode('utf-8'))
+                self.__logger.debug('Sent request info json')
+
+            elif in_data.startswith(b'bytes-'):
+                response_size = int(in_data[6:])
+                self.__logger.debug('Sending {} random bytes (max is {})'.format(response_size, binary_max_size))
+
+                if response_size > binary_max_size:
+                    error_msg = ('Requested binary payload of {} bytes exceeds maximum size {}.'
+                            .format(response_size, binary_max_size))
+                    self.__logger.error(error_msg)
+                    self._send_close(1011, error_msg)
+                    return
+
+                else:
+                    msg = random_string(ascii_bytes, response_size)
+                    # TODO stream output
+                    self.send_message(msg.encode('ascii'), self._opcode_binary)
+                    self.__logger.debug('Sent random {} bytes'.format(response_size))
+
+            elif in_data.startswith(b'chars-'):
+                response_size = int(in_data[6:])
+                self.__logger.debug('Sending {} random chars (max is {})'.format(response_size, text_max_size))
+
+                if response_size > text_max_size:
+                    error_msg = ('Requested text payload of {} chars exceeds maximum size {}.'
+                            .format(response_size, text_max_size))
+                    self.__logger.error(error_msg)
+                    self._send_close(1011, error_msg)
+                    return
+
+                else:
+                    msg = random_string(string.ascii_uppercase, response_size)
+                    self.send_message(msg.encode('utf-8'))
+                    self.__logger.debug('Sent random {} char string'.format(response_size))
+
+            else:
+                self.send_message(in_data)
+                self.__logger.debug('Sent echo string response')
+
+        else:
+            error_msg = 'Unsupported frame type {:x}.'.format(opcode)
+            self.__logger.error(error_msg)
+            self._send_close(1003, error_msg)
+
+    def __check_auth(self):
+        """Validate user authentication credentials, with exceptions for excluded endpoints."""
+        if _auth_handler is None:
+            return True
+        elif self.__path in ['/bad-status', '/sleep', '/status']:
+            return True
+        else:
+            auth_string = self.headers.get('Authorization')
+            return auth_string and _auth_handler(auth_string)
+
+    def __handle_http_request(self):
         global _pending_http_requests, _total_http_requests
         with _counter_lock:
             _pending_http_requests += 1
@@ -333,7 +429,6 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
         self.__excluded_headers = set()
         self.__exit_process = False
         self.__headers = make_default_response_headers(self.headers)
-        self.__method = method
         self.__path = None
         self.__query = None
         self.__response_bytes = None
@@ -503,14 +598,8 @@ class Kitchen(http.server.BaseHTTPRequestHandler):
             self.__async_req['expire-ms'] = int(async_expire_ms)
 
     def __process_path(self):
-        path, query_string = split2(self.path, '?', 1)
-        self.__path = path
-        self.__query = query_string
-
-        if not check_auth(path, self.headers.get('Authorization')):
-            self.__status = 403
-            self.__set_response(b'HTTP 403 - Forbidden\n')
-            return
+        path = self.__path
+        query_string = self.__query
 
         if query_string:
             query_params = dict(split2(param, '=', 1) for param in query_string.split('&'))
@@ -692,7 +781,7 @@ class BasicAuthHandler():
 
 def start_http_server(args):
     """Start HTTP/1.1 server using command-line arguments."""
-    logger.info('Starting HTTP server on port {}...'.format(args.port))
+    kitchen_logger.info('Starting HTTP server on port {}...'.format(args.port))
     kitchen = MultiThreadedServer(('', args.port), Kitchen)
     try:
         kitchen.serve_forever()
@@ -701,120 +790,13 @@ def start_http_server(args):
 
 def start_websockets_server(args):
     """Start WebSockets server using command-line arguments."""
-    logger.info('Starting WebSockets server on port {}...'.format(args.port))
+    kitchen_logger.info('Starting WebSockets server on port {}...'.format(args.port))
 
-    binary_max_size = args.ws_max_binary_message_size
-    text_max_size = args.ws_max_text_message_size
-    msg_max_size = max(binary_max_size, text_max_size)
-
-    kitchen = MultiThreadedServer(('', args.port), HTTPWebSocketsHandler)
+    kitchen = MultiThreadedServer(('', args.port), KitchenWSHandler)
     try:
         kitchen.serve_forever()
     except KeyboardInterrupt:
         kitchen.server_close()
-
-'''
-    class WSSP(websockets.server.WebSocketServerProtocol):
-        @asyncio.coroutine
-        def process_request(self, path, request_headers):
-            if request_headers.get('Upgrade') != 'websocket':
-                if path.startswith('/die'):
-                    terminate('WebSocket /die endpoint')
-                else:
-                    msg = b'HTTP OK\n'
-                    headers = make_default_response_headers(request_headers)
-                    headers['Content-Length'] = len(msg)
-                    return websockets.compatibility.OK, sorted(headers.items()), msg
-
-    @asyncio.coroutine
-    def handle_request(websocket, full_path):
-        global _pending_ws_requests, _total_ws_requests
-
-        path, query_string = split2(full_path, '?', 1)
-
-        with _counter_lock:
-            _pending_ws_requests += 1
-            _total_ws_requests += 1
-            connection_id = _total_ws_requests
-
-        try:
-            yield from websocket.send('Connected to kitchen')
-            logger.info('[{}] Opened WebSocket connection'.format(connection_id))
-
-            while True:
-                logger.debug('Waiting for a message...')
-                in_data = yield from websocket.recv()
-                if len(in_data) > 1000:
-                    logger.debug('[{}] Got data on websocket: <{}>'.format(connection_id, len(in_data)))
-                else:
-                    logger.debug('[{}] Got data on websocket: {}'.format(connection_id, in_data))
-
-                if isinstance(in_data, bytes):
-                    yield from websocket.send(in_data)
-                    logger.debug('[{}] Sent echo bytes response'.format(connection_id))
-
-                elif isinstance(in_data, str):
-                    if in_data == 'request-info':
-                        info = request_info('websocket', websocket.request_headers, path, query_string)
-                        yield from websocket.send(info)
-                        logger.debug('[{}] Sent request info json'.format(connection_id))
-
-                    elif in_data.startswith('bytes-'):
-                        response_size = int(in_data[6:])
-                        logger.debug('[{}] Sending {} random bytes (max is {})'.format(connection_id, response_size, binary_max_size))
-
-                        if response_size > binary_max_size:
-                            error_msg = ('[{}] Requested binary payload of {} bytes exceeds maximum size {}.'
-                                    .format(connection_id, response_size, binary_max_size))
-                            logger.error(error_msg)
-                            logger.debug(error_msg)
-                            yield from websocket.close(1011, error_msg)
-                            return
-
-                        else:
-                            msg = random_string(ascii_bytes, response_size)
-                            yield from websocket.send(msg.encode('ascii'))
-                            logger.debug('[{}] Sent random {} bytes'.format(connection_id, response_size))
-
-                    elif in_data.startswith('chars-'):
-                        response_size = int(in_data[6:])
-                        logger.debug('[{}] Sending {} random chars (max is {})'.format(connection_id, response_size, text_max_size))
-
-                        if response_size > text_max_size:
-                            error_msg = ('[{}] Requested text payload of {} chars exceeds maximum size {}.'
-                                    .format(connection_id, response_size, text_max_size))
-                            logger.error(error_msg)
-                            yield from websocket.close(1011, error_msg)
-                            return
-
-                        else:
-                            msg = random_string(string.ascii_uppercase, response_size)
-                            yield from websocket.send(msg)
-                            logger.debug('[{}] Sent random {} char string'.format(connection_id, response_size))
-
-                    else:
-                        yield from websocket.send(in_data)
-                        logger.debug('[{}] Sent echo string response'.format(connection_id))
-
-                else:
-                    error_msg = '[{}] Closing connection due to bad input of type {}.'.format(connection_id, type(in_data))
-                    logger.error(error_msg)
-                    yield from websocket.close(1003, error_msg)
-                    return
-
-        except websockets.exceptions.ConnectionClosed:
-            logger.debug('[{}] Caught connection closed exception'.format(connection_id))
-
-        finally:
-            with _counter_lock:
-                _pending_ws_requests -= 1
-            logger.info('[{}] Closed WebSocket connection'.format(connection_id))
-
-    start_server = websockets.serve(handle_request, '', args.port, create_protocol=WSSP, max_size=msg_max_size)
-
-    asyncio.get_event_loop().run_until_complete(start_server)
-    asyncio.get_event_loop().run_forever()
-'''
 
 if __name__ == '__main__':
 
@@ -830,25 +812,24 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     logging.basicConfig(filename='kitchen.log', level=logging.INFO)
-    logger = logging.getLogger('kitchen')
-    logger.setLevel(logging.DEBUG)
+    kitchen_logger = logging.getLogger('kitchen')
+    kitchen_logger.setLevel(logging.DEBUG)
 
     username = os.environ.get('WAITER_USERNAME')
     password = os.environ.get('WAITER_PASSWORD')
 
     if username and password:
-        logger.info('Basic Authentication Enabled')
+        kitchen_logger.info('Basic Authentication Enabled')
         _auth_handler = BasicAuthHandler(username, password)
 
     if args.start_up_sleep_ms > 0:
-        logger.info('Sleeping for {}ms...'.format(args.start_up_sleep_ms))
+        kitchen_logger.info('Sleeping for {}ms...'.format(args.start_up_sleep_ms))
         time.sleep(args.start_up_sleep_ms / 1000.0)
 
-    try:
-        if args.websockets:
-            start_websockets_server(args)
-        else:
-            start_http_server(args)
+    binary_max_size = args.ws_max_binary_message_size
+    text_max_size = args.ws_max_text_message_size
 
+    try:
+        start_http_server(args)
     finally:
-        logger.info('Server is exiting.')
+        kitchen_logger.info('Server is exiting.')
