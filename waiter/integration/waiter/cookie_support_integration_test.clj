@@ -48,12 +48,12 @@
                                                                                               :value "cookie"
                                                                                               :discard false
                                                                                               :path "/"})))
-              body-json (json/read-str (str body))]
+              body-json (try-parse-json (str body))]
           (is (= "test=cookie" (get-in body-json ["headers" "cookie"])))))
       (testing "no cookies sent to backend (x-waiter-auth removed)"
         (let [{:keys [service-id cookies]} (make-request-with-debug-info headers #(make-kitchen-request waiter-url %))
               {:keys [body]} (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :path "/request-info"
                                                                                           :cookies cookies))
-              {:strings [headers]} (json/read-str (str body))]
+              {:strings [headers]} (try-parse-json (str body))]
           (is (not (contains? headers "cookie")))
           (delete-service waiter-url service-id))))))

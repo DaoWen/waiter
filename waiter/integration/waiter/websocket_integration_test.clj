@@ -89,7 +89,7 @@
                            (add-auth-cookie request auth-cookie-value))})
           (is (= :done (deref response-promise default-timeout-period :timed-out))))
         (is (= "Connected to kitchen" (first @ws-response-atom)))
-        (let [{:keys [headers]} (-> @ws-response-atom second str json/read-str walk/keywordize-keys)
+        (let [{:keys [headers]} (-> @ws-response-atom second str try-parse-json walk/keywordize-keys)
               {:keys [upgrade x-cid x-waiter-auth-principal]} headers]
           (is x-cid)
           (is (= upgrade "websocket"))

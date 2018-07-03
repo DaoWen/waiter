@@ -106,7 +106,7 @@
   "Parses a response as json and keywordizes the map."
   [response-body]
   (try
-    (-> response-body str json/read-str pc/keywordize-map)
+    (-> response-body str try-parse-json pc/keywordize-map)
     (catch Exception _
       (is false (str "Failed to parse token " response-body)))))
 
@@ -159,7 +159,7 @@
         (doseq [token tokens-to-create]
           (let [{:keys [body headers]} (get-token waiter-url token)
                 token-description (-> body
-                                      json/read-str
+                                      try-parse-json
                                       walk/keywordize-keys
                                       (select-keys [:name])
                                       (assoc :health-check-url "/probe"
@@ -177,7 +177,7 @@
                                                             :request-headers {})
                   actual-etag (get headers "etag")]
               (assert-response-status response 200)
-              (let [token-description (-> response :body json/read-str)]
+              (let [token-description (-> response :body try-parse-json)]
                 (is (= {"health-check-url" "/check", "name" service-id-prefix}
                        (-> token-description (get-in (repeat 2 "previous")) (select-keys sd/service-parameter-keys))))
                 (is (= {"health-check-url" "/health", "name" service-id-prefix}
@@ -196,7 +196,7 @@
                                                                 (-> last-update-time du/str-to-date .getMillis))))
                       expected-etag (str "E-"
                                          (-> body
-                                             json/read-str
+                                             try-parse-json
                                              convert-last-update-time
                                              (dissoc "previous")
                                              sd/parameters->id))]
@@ -211,7 +211,7 @@
               (assert-token-response token-root service-id-prefix false true))
           (let [{:keys [body] :as tokens-response}
                 (list-tokens router-url current-user cookies {"include" ["deleted" "metadata"]})
-                tokens (json/read-str body)]
+                tokens (try-parse-json body)]
             (assert-response-status tokens-response 200)
             (is (every? (fn [token-entry] (contains? token-entry "deleted")) tokens))
             (is (every? (fn [token-entry] (contains? token-entry "etag")) tokens))
@@ -238,14 +238,14 @@
               (assert-token-response token-root service-id-prefix true))
           (let [{:keys [body] :as tokens-response}
                 (list-tokens router-url current-user cookies {"include" ["metadata"]})
-                tokens (json/read-str body)]
+                tokens (try-parse-json body)]
             (assert-response-status tokens-response 200)
             (is (every? (fn [token-entry] (contains? token-entry "deleted")) tokens))
             (is (every? (fn [token-entry] (contains? token-entry "etag")) tokens))
             (is (not-any? (fn [token-entry] (= token (get token-entry "token"))) tokens)))
           (let [{:keys [body] :as tokens-response}
                 (list-tokens router-url current-user cookies {"include" ["deleted" "metadata"]})
-                tokens (json/read-str body)]
+                tokens (try-parse-json body)]
             (assert-response-status tokens-response 200)
             (is (every? (fn [token-entry] (contains? token-entry "deleted")) tokens))
             (is (every? (fn [token-entry] (contains? token-entry "etag")) tokens))
@@ -260,7 +260,7 @@
             (is (str/includes? (str body) "Couldn't find token") (str body)))
           (let [{:keys [body] :as tokens-response}
                 (list-tokens router-url current-user cookies {"include" ["deleted" "metadata"]})
-                tokens (json/read-str body)]
+                tokens (try-parse-json body)]
             (assert-response-status tokens-response 200)
             (is (every? (fn [token-entry] (contains? token-entry "deleted")) tokens))
             (is (every? (fn [token-entry] (contains? token-entry "etag")) tokens))
@@ -300,7 +300,7 @@
                   (is (not body))))
               (log/info "created configuration using token" token)
               (let [token-response (get-token waiter-url token)
-                    response-body (json/read-str (:body token-response))]
+                    response-body (try-parse-json (:body token-response))]
                 (is (contains? response-body "last-update-time"))
                 (is (= {"health-check-url" "/probe"
                         "last-update-user" (retrieve-username)
@@ -353,7 +353,7 @@
 
                 (testing "backend request headers"
                   (let [{:keys [body] :as response} (make-request waiter-url "/request-info" :headers request-headers)
-                        {:strs [headers]} (json/read-str (str body))]
+                        {:strs [headers]} (try-parse-json (str body))]
                     (assert-response-status response 200)
                     (is (contains? headers "x-waiter-auth-principal"))
                     (is (contains? headers "x-waiter-authenticated-principal"))))
@@ -426,7 +426,7 @@
                 (log/info "creating configuration using token" token)
                 (let [{:keys [body headers]} (get-token waiter-url token)
                       token-description (-> body
-                                            json/read-str
+                                            try-parse-json
                                             walk/keywordize-keys
                                             (assoc :health-check-url "/probe-2"
                                                    :last-update-time last-update-time
@@ -440,7 +440,7 @@
                   (log/info "created configuration using token" token))
 
                 (let [token-response (get-token waiter-url token)
-                      response-body (json/read-str (:body token-response))]
+                      response-body (try-parse-json (:body token-response))]
                   (is (= {"health-check-url" "/probe-2"
                           "last-update-time" (-> last-update-time DateTime. du/date-to-str)
                           "last-update-user" (retrieve-username)
@@ -499,7 +499,7 @@
 
               (let [{:keys [body headers]} (get-token waiter-url token)
                     token-description (-> body
-                                          json/read-str
+                                          try-parse-json
                                           walk/keywordize-keys
                                           (assoc :deleted true
                                                  :health-check-url "/probe"
@@ -515,7 +515,7 @@
                 (assert-response-status response 404)
                 (is (str/includes? (str body) "Couldn't find token") (str body)))
               (let [token-response (get-token waiter-url token :query-params {"include" ["deleted" "metadata"]})
-                    response-body (json/read-str (:body token-response))]
+                    response-body (try-parse-json (:body token-response))]
                 (is (= {"deleted" true
                         "health-check-url" "/probe"
                         "last-update-time" (-> last-update-time DateTime. du/date-to-str)
@@ -606,7 +606,7 @@
         (log/info "asserted retrieval of configuration for token" token)
 
         (let [{:keys [body] :as token-response} (get-token waiter-url token)
-              token-description (try (json/read-str (str body))
+              token-description (try (try-parse-json (str body))
                                      (catch Exception _
                                        (is false (str "Failed to parse token" body))))]
           (assert-response-status token-response 200)
@@ -701,7 +701,7 @@
           register-response (post-token waiter-url service-desc)
           {:keys [body]} (get-token waiter-url token)]
       (assert-response-status register-response 200)
-      (is (= (:metadata service-desc) (get (json/read-str body) "metadata")))
+      (is (= (:metadata service-desc) (get (try-parse-json body) "metadata")))
       (delete-token-and-assert waiter-url token)
       (delete-service waiter-url (:name service-desc)))))
 
@@ -868,7 +868,7 @@
 
         (testing "token retrieval"
           (let [token-response (get-token waiter-url token)
-                response-body (-> token-response (:body) (json/read-str) (pc/keywordize-map))]
+                response-body (-> token-response (:body) (try-parse-json) (pc/keywordize-map))]
             (is (nil? (get response-body :run-as-user)))
             (is (contains? response-body :last-update-time))
             (is (= (assoc service-description
@@ -1003,7 +1003,7 @@
 
         (testing "token retrieval"
           (let [token-response (get-token waiter-url token)
-                response-body (-> token-response :body json/read-str pc/keywordize-map)]
+                response-body (-> token-response :body try-parse-json pc/keywordize-map)]
             (is (contains? response-body :last-update-time))
             (is (= (assoc service-description
                      :authentication "disabled"
@@ -1022,7 +1022,7 @@
         (testing "backend request headers"
           (let [{:keys [body] :as response}
                 (make-request waiter-url "/request-info" :headers request-headers :disable-auth true)
-                {:strs [headers]} (json/read-str (str body))
+                {:strs [headers]} (try-parse-json (str body))
                 service-id (retrieve-service-id waiter-url (:request-headers response))]
             (assert-response-status response 200)
             (is (not (contains? headers "x-waiter-auth-principal")))
@@ -1053,7 +1053,7 @@
                                                             #(make-request waiter-url "/environment" :headers %))
                                          kitchen-service-id (-> kitchen-response
                                                                 :body
-                                                                (json/read-str)
+                                                                (try-parse-json)
                                                                 (get "WAITER_SERVICE_ID"))]
                                      (is (= kitchen-service-id (:service-id kitchen-response)))
                                      kitchen-service-id))

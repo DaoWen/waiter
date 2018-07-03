@@ -48,7 +48,7 @@
         (log/info "Basic test for empty body in request")
         (let [request-headers (assoc request-headers :accept "text/plain")
               {:keys [body headers]} (make-kitchen-request waiter-url request-headers :path "/request-info")
-              body-json (json/read-str (str body))]
+              body-json (try-parse-json (str body))]
           (is (= "application/json" (get headers "content-type")) (str headers))
           (is (every? #(get-in body-json ["headers" %]) ["authorization" "x-cid" "x-waiter-auth-principal"]) (str body))
           (is (nil? (get-in body-json ["headers" "content-type"])) (str body))
@@ -95,7 +95,7 @@
                                             :path "/request-info"
                                             :query-params bad-query-string)]
           (assert-response-status response 200)
-          (is (= bad-query-string (get (json/read-str body) "query-string"))))
+          (is (= bad-query-string (get (try-parse-json body) "query-string"))))
 
         (log/info "Basic test for query-string with encoded characters")
         (let [bad-query-string (str "q=" (URLEncoder/encode "~`!@$%^&*()_-+={}[]|:;'<>,.?&foo=%12jhsdf"))
@@ -105,7 +105,7 @@
                                             :path "/request-info"
                                             :query-params bad-query-string)]
           (assert-response-status response 200)
-          (is (= bad-query-string (get (json/read-str body) "query-string")))))
+          (is (= bad-query-string (get (try-parse-json body) "query-string")))))
 
       (testing "http methods"
         (log/info "Basic test for empty body in request")
@@ -117,7 +117,7 @@
           (testing (str "http method: " (-> request-method name str/upper-case))
             (let [{:keys [body] :as response}
                   (make-kitchen-request waiter-url request-headers :method request-method :path "/request-info")
-                  body-json (json/read-str (str body))]
+                  body-json (try-parse-json (str body))]
               (assert-response-status response 200)
               (is (= (name request-method) (get body-json "request-method")))))))
 
@@ -134,8 +134,8 @@
                              :path "/request-info"
                              ; force a chunked request
                              :body (ByteArrayInputStream. (.getBytes long-request)))
-              plain-body-json (json/read-str (str (:body plain-resp)))
-              chunked-body-json (json/read-str (str (:body chunked-resp)))]
+              plain-body-json (try-parse-json (str (:body plain-resp)))
+              chunked-body-json (try-parse-json (str (:body chunked-resp)))]
           (is (= (str request-length) (get-in plain-body-json ["headers" "content-length"])))
           (is (nil? (get-in plain-body-json ["headers" "transfer-encoding"])))
           (is (= "chunked" (get-in chunked-body-json ["headers" "transfer-encoding"])))
@@ -180,7 +180,7 @@
               {:keys [body] :as logs-response} (make-request-fn log-url)
               _ (assert-response-status logs-response 200)
               _ (log/debug "Response body:" body)
-              log-files-list (walk/keywordize-keys (json/read-str body))
+              log-files-list (walk/keywordize-keys (try-parse-json body))
               stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
               stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
           (is (every? #(str/includes? body %) ["stderr" "stdout" service-id])
@@ -287,7 +287,7 @@
                      :x-waiter-env-time2 "201607132013"}
             {:keys [body status service-id] :as response}
             (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :path "/environment"))
-            body-json (json/read-str (str body))]
+            body-json (try-parse-json (str body))]
         (is (= 200 status))
         (testing "waiter configured environment variables"
           (is (every? #(contains? body-json %)
@@ -310,7 +310,7 @@
                      :x-waiter-env-foo "bar"
                      :x-waiter-env-fee_fie "fum"}
             {:keys [body status]} (make-request-with-debug-info headers #(make-kitchen-request waiter-url %))
-            env-error-message (get-in (json/read-str body) ["waiter-error" "message" "env"])]
+            env-error-message (get-in (try-parse-json body) ["waiter-error" "message" "env"])]
         (is (= 400 status))
         (is (every? #(str/includes? env-error-message %)
                     ["The following environment variable keys are invalid:" "1_INVALID" "123456" "BEGIN-DATE" "END-DATE"]))
@@ -411,7 +411,7 @@
                       (fn []
                         (let [router-url (router-id->router-url router-id)
                               {:keys [body]} (make-request router-url "/apps" :cookies cookies)]
-                          (->> (json/read-str (str body))
+                          (->> (try-parse-json (str body))
                                (filter #(= service-id (get % "service-id")))
                                first
                                walk/keywordize-keys
@@ -437,7 +437,7 @@
                       (fn []
                         (let [router-url (router-id->router-url router-id)
                               {:keys [body]} (make-request router-url "/apps" :cookies cookies)]
-                          (->> (json/read-str (str body))
+                          (->> (try-parse-json (str body))
                                (filter #(= service-id (get % "service-id")))
                                seq
                                not)))
@@ -487,7 +487,7 @@
         (let [{:keys [body] :as response}
               (make-request waiter-url override-endpoint :body (json/write-str overrides) :method :get)]
           (assert-response-status response 200)
-          (let [response-data (-> body str json/read-str walk/keywordize-keys)]
+          (let [response-data (-> body str try-parse-json walk/keywordize-keys)]
             (is (= (retrieve-username) (:last-updated-by response-data)))
             (is (= overrides (:overrides response-data)))
             (is (= service-id (:service-id response-data)))
@@ -584,7 +584,7 @@
                           :x-waiter-ports num-ports}
           {:keys [body service-id]}
           (make-request-with-debug-info waiter-headers #(make-kitchen-request waiter-url % :path "/environment"))
-          body-json (json/read-str (str body))]
+          body-json (try-parse-json (str body))]
       (is (every? #(contains? body-json (str "PORT" %)) (range num-ports))
           (str body-json))
       (let [{:keys [extra-ports port] :as active-instance}
@@ -652,7 +652,7 @@
         (is (str/includes? body "<html>"))))
     (testing "application/json explicit"
       (let [{:keys [body headers status]} (make-request waiter-url "/404" :headers {"accept" "application/json"})
-            {:strs [waiter-error]} (try (json/read-str body)
+            {:strs [waiter-error]} (try (try-parse-json body)
                                         (catch Throwable _
                                           (is false (str "Could not parse body that is supposed to be JSON:\n" body))))]
         (is (= 404 status))
@@ -662,7 +662,7 @@
           (is (= 404 status)))))
     (testing "application/json implied by content-type"
       (let [{:keys [body headers status]} (make-request waiter-url "/404" :headers {"content-type" "application/json"})
-            {:strs [waiter-error]} (try (json/read-str body)
+            {:strs [waiter-error]} (try (try-parse-json body)
                                         (catch Throwable _
                                           (is false (str "Could not parse body that is supposed to be JSON:\n" body))))]
         (is (= 404 status))
@@ -673,7 +673,7 @@
     (testing "support information included"
       (let [{:keys [body headers status]} (make-request waiter-url "/404" :headers {"accept" "application/json"})
             {:keys [messages support-info]} (waiter-settings waiter-url)
-            {:strs [waiter-error]} (try (json/read-str body)
+            {:strs [waiter-error]} (try (try-parse-json body)
                                         (catch Throwable _
                                           (is false (str "Could not parse body that is supposed to be JSON:\n" body))))]
 
@@ -705,7 +705,7 @@
         (is (str/includes? body "Welcome to Waiter"))))
     (testing "accept application/json"
       (let [{:keys [body headers status]} (make-request waiter-url "/" :headers {"accept" "application/json"})
-            json-data (try (json/read-str body)
+            json-data (try (try-parse-json body)
                            (catch Exception _
                              (is false ("Not json:\n" body))))]
         (is (= 200 status))
