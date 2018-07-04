@@ -118,6 +118,9 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         super().setup()
         self.connected = False
 
+    def logger(self):
+        return logging.getLogger()
+
     def checkAuthentication(self):
         auth = self.headers.get('Authorization')
         if auth != "Basic {}".format(self.server.auth):
@@ -152,6 +155,7 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             except (socket.error, WebSocketError) as e:
                 #websocket content error, time-out or disconnect.
                 self.log_message("RCV: Close connection: Socket Error {}".format(e.args))
+                self.logger().error("RCV: Close connection: Socket Error {}".format(e.args))
                 self._ws_close()
             except Exception as err:
                 #unexpected error in websocket connection.
@@ -168,6 +172,7 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
                 length = struct.unpack(">H", self.rfile.read(2))[0]
             elif length == 127:
                 length = struct.unpack(">Q", self.rfile.read(8))[0]
+            self.logger().debug("Got message type {:x} length {}".format(opcode, length))
             masks = bytes(self.rfile.read(4))
             decoded = bytearray(self.rfile.read(length))
             for i in range(length):
@@ -270,8 +275,9 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             self.on_ws_message(opcode, message)
 
     def _send_close(self, code=None, message=b''):
+        import inspect
+        self.logger().debug(inspect.stack())
         #Dedicated _send_close allows for catch all exception handling
-        print('closing...')
         if code is None:
             self.request.send(bytes([0x80 | self._opcode_close, 0x00]))
         else:
@@ -326,6 +332,9 @@ class Kitchen(HTTPWebSocketsHandler):
         else:
             self.__handle_http_request()
 
+    def logger(self):
+        return self.__logger
+
     def on_ws_connected(self):
         """Override this handler."""
         global _pending_ws_requests, _total_ws_requests
@@ -334,42 +343,44 @@ class Kitchen(HTTPWebSocketsHandler):
             _total_ws_requests += 1
             self.__connection_id = _total_ws_requests
         self.__logger = kitchen_logger.getChild('ws{:03d}'.format(self.__connection_id))
-        self.__logger.info('Opened WebSocket connection')
+        self.logger().info('Opened WebSocket connection')
         self.send_message(b'Connected to kitchen')
 
     def on_ws_closed(self):
         """Override this handler."""
+        import inspect
+        self.logger().debug(inspect.stack())
         global _pending_ws_requests
         with _counter_lock:
             _pending_ws_requests -= 1
-        self.__logger.info('Closed WebSocket connection')
+        self.logger().info('Closed WebSocket connection')
 
     def on_ws_message(self, opcode, in_data):
         """Override this handler to process incoming websocket messages."""
         if len(in_data) > 1000:
-            self.__logger.debug('Got data on websocket: <{}>'.format(len(in_data)))
+            self.logger().debug('Got data on websocket: <{}>'.format(len(in_data)))
         else:
-            self.__logger.debug('Got data on websocket: {}'.format(in_data))
+            self.logger().debug('Got data on websocket: {}'.format(in_data))
 
         if opcode == self._opcode_binary:
             self.send_message(in_data, opcode)
-            self.__logger.debug('Sent echo bytes response')
+            self.logger().debug('Sent echo bytes response')
 
         elif opcode == self._opcode_text:
             # TODO kitchen-state
             if in_data == b'request-info':
                 info = request_info('websocket', self.headers, self.__path, self.__query)
                 self.send_message(info.encode('utf-8'))
-                self.__logger.debug('Sent request info json')
+                self.logger().debug('Sent request info json')
 
             elif in_data.startswith(b'bytes-'):
                 response_size = int(in_data[6:])
-                self.__logger.debug('Sending {} random bytes (max is {})'.format(response_size, binary_max_size))
+                self.logger().debug('Sending {} random bytes (max is {})'.format(response_size, binary_max_size))
 
                 if response_size > binary_max_size:
                     error_msg = ('Requested binary payload of {} bytes exceeds maximum size {}.'
                             .format(response_size, binary_max_size))
-                    self.__logger.error(error_msg)
+                    self.logger().error(error_msg)
                     self._send_close(1011, error_msg)
                     return
 
@@ -377,31 +388,31 @@ class Kitchen(HTTPWebSocketsHandler):
                     msg = random_string(ascii_bytes, response_size)
                     # TODO stream output
                     self.send_message(msg.encode('ascii'), self._opcode_binary)
-                    self.__logger.debug('Sent random {} bytes'.format(response_size))
+                    self.logger().debug('Sent random {} bytes'.format(response_size))
 
             elif in_data.startswith(b'chars-'):
                 response_size = int(in_data[6:])
-                self.__logger.debug('Sending {} random chars (max is {})'.format(response_size, text_max_size))
+                self.logger().debug('Sending {} random chars (max is {})'.format(response_size, text_max_size))
 
                 if response_size > text_max_size:
                     error_msg = ('Requested text payload of {} chars exceeds maximum size {}.'
                             .format(response_size, text_max_size))
-                    self.__logger.error(error_msg)
+                    self.logger().error(error_msg)
                     self._send_close(1011, error_msg)
                     return
 
                 else:
                     msg = random_string(string.ascii_uppercase, response_size)
                     self.send_message(msg.encode('utf-8'))
-                    self.__logger.debug('Sent random {} char string'.format(response_size))
+                    self.logger().debug('Sent random {} char string'.format(response_size))
 
             else:
                 self.send_message(in_data)
-                self.__logger.debug('Sent echo string response')
+                self.logger().debug('Sent echo string response')
 
         else:
             error_msg = 'Unsupported frame type {:x}.'.format(opcode)
-            self.__logger.error(error_msg)
+            self.logger().error(error_msg)
             self._send_close(1003, error_msg)
 
     def __check_auth(self):
@@ -429,8 +440,6 @@ class Kitchen(HTTPWebSocketsHandler):
         self.__excluded_headers = set()
         self.__exit_process = False
         self.__headers = make_default_response_headers(self.headers)
-        self.__path = None
-        self.__query = None
         self.__response_bytes = None
         self.__response_length = max_response_size
         self.__status = 200
@@ -811,14 +820,14 @@ if __name__ == '__main__':
             help='Maximum text message response size (in characters) allowed by the WebSocket server')
     args = parser.parse_args()
 
-    logging.basicConfig(filename='kitchen.log', level=logging.INFO)
+    logging.basicConfig(filename='kitchen.log', level=logging.DEBUG)
     kitchen_logger = logging.getLogger('kitchen')
     kitchen_logger.setLevel(logging.DEBUG)
 
     username = os.environ.get('WAITER_USERNAME')
     password = os.environ.get('WAITER_PASSWORD')
 
-    if username and password:
+    if False and username and password:
         kitchen_logger.info('Basic Authentication Enabled')
         _auth_handler = BasicAuthHandler(username, password)
 
