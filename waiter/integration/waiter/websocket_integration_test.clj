@@ -31,7 +31,7 @@
            (org.eclipse.jetty.websocket.api UpgradeException UpgradeRequest)
            (org.eclipse.jetty.websocket.client WebSocketClient)))
 
-(def ^:const default-timeout-period (-> 30 t/seconds t/in-millis))
+(def ^:const default-timeout-period (-> 4 t/minutes t/in-millis))
 
 (defn- ws-url [waiter-url endpoint]
   (str "ws://" waiter-url endpoint))
@@ -79,15 +79,10 @@
             (ws-url waiter-url "/websocket-auth")
             (fn [{:keys [in out]}]
               (async/go
-                (log/info "X1")
                 (async/>! out "request-info")
-                (log/info "X2")
                 (swap! ws-response-atom conj (async/<! in))
-                (log/info "X3")
                 (swap! ws-response-atom conj (async/<! in))
-                (log/info "X4")
                 (deliver response-promise :done)
-                (log/info "X5")
                 (async/close! out)))
             {:middleware (fn [_ ^UpgradeRequest request]
                            (websocket/add-headers-to-upgrade-request! request waiter-headers)
