@@ -154,39 +154,44 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
                 self._read_next_message()
             except (socket.error, WebSocketError) as e:
                 #websocket content error, time-out or disconnect.
-                self.log_message("RCV: Close connection: Socket Error {}".format(e.args))
-                self.logger().error("RCV: Close connection: Socket Error {}".format(e.args))
+                self.logger().exception("RCV: Close connection: Socket Error {}".format(e.args))
                 self._ws_close()
             except Exception as err:
                 #unexpected error in websocket connection.
-                self.log_error("RCV: Exception: in _read_messages: {}".format(err.args))
+                self.logger().exception("RCV: Exception: in _read_messages: {}".format(err.args))
                 self._ws_close()
 
     def _read_next_message(self):
         #self.rfile.read(n) is blocking.
         #it returns however immediately when the socket is closed.
         try:
-            opcode = ord(self.rfile.read(1)) & 0x0F
-            length = ord(self.rfile.read(1)) & 0x7F
+            x = ord(self.rfile.read(1))
+            final = (x & 0x80) != 0
+            opcode = x & 0x0F
+            x = ord(self.rfile.read(1))
+            masked = (x & 0x80) != 0
+            length = x & 0x7F
             if length == 126:
                 length = struct.unpack(">H", self.rfile.read(2))[0]
             elif length == 127:
                 length = struct.unpack(">Q", self.rfile.read(8))[0]
-            self.logger().debug("Got message type {:x} length {}".format(opcode, length))
-            masks = bytes(self.rfile.read(4))
+            if masked:
+                masks = bytes(self.rfile.read(4))
+            self.logger().debug("Got message type={:x}, length={}, masked={}".format(opcode, length, masked))
             decoded = bytearray(self.rfile.read(length))
-            for i in range(length):
-                decoded[i] ^= masks[i % 4]
+            if masked:
+                for i in range(length):
+                    decoded[i] ^= masks[i % 4]
             self._on_message(opcode, decoded)
         except (struct.error, TypeError) as e:
-            import traceback
-            traceback.print_exc()
+            self.logger().exception('Error reading message')
             #catch exceptions from ord() and struct.unpack()
             if self.connected:
+                self.logger().debug("No bytes available? {}".format(len(self.request.recv(1)) == 0))
                 raise WebSocketError("Websocket read aborted while listening")
             else:
                 #the socket was closed while waiting for input
-                self.log_error("RCV: _read_next_message aborted after closed connection")
+                self.logger().error("RCV: _read_next_message aborted after closed connection")
                 pass
 
     def _send_message(self, opcode, message):
@@ -207,13 +212,14 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             # TODO - handle chunking and lazy generation
             if length > 0:
                 self.request.send(message)
+            self.logger().debug("Sent message type {:x} length {}".format(opcode, length))
         except socket.error as e:
             #websocket content error, time-out or disconnect.
-            self.log_message("SND: Close connection: Socket Error {}".format(e.args))
+            self.logger().exception("SND: Close connection: Socket Error {}".format(e.args))
             self._ws_close()
         except Exception as err:
             #unexpected error in websocket connection.
-            self.log_error("SND: Exception: in _send_message: {}".format(err.args))
+            self.logger().exception("SND: Exception: in _send_message: {}".format(err.args))
             self._ws_close()
 
     def _handshake(self):
@@ -231,28 +237,25 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         #self.close_connection = 0
         self.on_ws_connected()
 
-    def _ws_close(self):
+    def _ws_close(self, code=None, message=b''):
         #avoid closing a single socket two time for send and receive.
-        self.mutex.acquire()
-        try:
+        with self.mutex:
             if self.connected:
                 self.connected = False
                 #Terminate BaseHTTPRequestHandler.handle() loop:
                 self.close_connection = 1
                 #send close and ignore exceptions. An error may already have occurred.
                 try:
-                    self._send_close()
+                    self._send_close(code, message)
                 except:
-                    pass
+                    self.logger().error("Failed to send close frame.")
                 self.on_ws_closed()
             else:
-                self.log_message("_ws_close websocket in closed state. Ignore.")
+                self.logger().debug("_ws_close websocket in closed state. Ignore.")
                 pass
-        finally:
-            self.mutex.release()
 
     def _on_message(self, opcode, message):
-        #self.log_message("_on_message: opcode: %02X msg: %s" % (opcode, message))
+        #self.logger().message("_on_message: opcode: %02X msg: %s" % (opcode, message))
 
         # close
         if opcode == self._opcode_close:
@@ -260,7 +263,7 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
             #Terminate BaseHTTPRequestHandler.handle() loop:
             self.close_connection = 1
             try:
-                self._send_close()
+                self._send_close(1000, b'Connection closed by client')
             except:
                 pass
             self.on_ws_closed()
@@ -274,14 +277,12 @@ class HTTPWebSocketsHandler(http.server.BaseHTTPRequestHandler):
         elif opcode in (self._opcode_continuation, self._opcode_text, self._opcode_binary):
             self.on_ws_message(opcode, message)
 
-    def _send_close(self, code=None, message=b''):
-        import inspect
-        self.logger().debug(inspect.stack())
+    def _send_close(self, code, message):
         #Dedicated _send_close allows for catch all exception handling
         if code is None:
-            self.request.send(bytes([0x80 | self._opcode_close, 0x00]))
+            self._send_message(_opcode_close, b'')
         else:
-            self._send_message(code, struct.pack(">H", code) + message)
+            self._send_message(_opcode_close, struct.pack(">H", code) + message)
 
 '''
 End MIT Licensed Code
@@ -319,8 +320,10 @@ class Kitchen(HTTPWebSocketsHandler):
         self.do_http_action('put')
 
     def do_http_action(self, method):
+        self.__logger = kitchen_logger
         self.__method = method
         self.__path, self.__query = split2(self.path, '?', 1)
+        self.protocol_version = 'HTTP/1.1'
 
         if not self.__check_auth():
             self._empty_response(403)
@@ -348,8 +351,6 @@ class Kitchen(HTTPWebSocketsHandler):
 
     def on_ws_closed(self):
         """Override this handler."""
-        import inspect
-        self.logger().debug(inspect.stack())
         global _pending_ws_requests
         with _counter_lock:
             _pending_ws_requests -= 1
@@ -381,7 +382,7 @@ class Kitchen(HTTPWebSocketsHandler):
                     error_msg = ('Requested binary payload of {} bytes exceeds maximum size {}.'
                             .format(response_size, binary_max_size))
                     self.logger().error(error_msg)
-                    self._send_close(1011, error_msg)
+                    self._ws_close(1011, error_msg)
                     return
 
                 else:
@@ -398,7 +399,7 @@ class Kitchen(HTTPWebSocketsHandler):
                     error_msg = ('Requested text payload of {} chars exceeds maximum size {}.'
                             .format(response_size, text_max_size))
                     self.logger().error(error_msg)
-                    self._send_close(1011, error_msg)
+                    self._ws_close(1011, error_msg)
                     return
 
                 else:
@@ -413,7 +414,7 @@ class Kitchen(HTTPWebSocketsHandler):
         else:
             error_msg = 'Unsupported frame type {:x}.'.format(opcode)
             self.logger().error(error_msg)
-            self._send_close(1003, error_msg)
+            self._ws_close(1003, error_msg)
 
     def __check_auth(self):
         """Validate user authentication credentials, with exceptions for excluded endpoints."""
@@ -476,7 +477,6 @@ class Kitchen(HTTPWebSocketsHandler):
             self.__headers['Content-Length'] = self.__response_length
 
         # Send response headers
-        self.protocol_version = 'HTTP/1.1'
         self.send_response(self.__status)
         for k, v in sorted(self.__cookies.items()):
             k = urllib.parse.quote_plus(k)
@@ -827,7 +827,7 @@ if __name__ == '__main__':
     username = os.environ.get('WAITER_USERNAME')
     password = os.environ.get('WAITER_PASSWORD')
 
-    if False and username and password:
+    if username and password:
         kitchen_logger.info('Basic Authentication Enabled')
         _auth_handler = BasicAuthHandler(username, password)
 
