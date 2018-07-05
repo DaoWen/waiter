@@ -337,11 +337,11 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [orchestrator-name pod-base-port replicaset-api-version replicaset-spec-file-path] :as scheduler}
+  [{:keys [orchestrator-name pod-base-port replicaset-api-version
+           replicaset-spec-file-path service-id->password-fn] :as scheduler}
    service-id
    {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
-           health-check-max-consecutive-failures mem min-instances ports run-as-user] :as service-description}
-   service-id->password-fn]
+           health-check-max-consecutive-failures mem min-instances ports run-as-user] :as service-description}]
   (let [home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
@@ -386,10 +386,9 @@
 (defn- create-service
   "Reify a Waiter Service as a Kubernetes ReplicaSet."
   [{:keys [service-id] :as descriptor}
-   {:keys [api-server-url http-client replicaset-api-version] :as scheduler}
-   service-id->password-fn]
+   {:keys [api-server-url http-client replicaset-api-version] :as scheduler}]
   (let [{:strs [run-as-user] :as service-description} (:service-description descriptor)
-        spec-json (service-spec scheduler service-id service-description service-id->password-fn)
+        spec-json (service-spec scheduler service-id service-description)
         request-url (str api-server-url "/apis/" replicaset-api-version "/namespaces/"
                          (service-description->namespace service-description) "/replicasets")
         response-json (api-request http-client request-url
@@ -441,6 +440,7 @@
                                 replicaset-api-version
                                 replicaset-spec-file-path
                                 service-id->failed-instances-transient-store
+                                service-id->password-fn
                                 service-id->service-description-fn]
   scheduler/ServiceScheduler
 
@@ -487,10 +487,10 @@
       (catch [:status 404] _
         (comment "App does not exist."))))
 
-  (create-app-if-new [this service-id->password-fn {:keys [service-id] :as descriptor}]
+  (create-app-if-new [this {:keys [service-id] :as descriptor}]
     (when-not (scheduler/app-exists? this service-id)
       (ss/try+
-        (create-service descriptor this service-id->password-fn)
+        (create-service descriptor this)
         (catch [:status 409] _
           (log/error "Conflict status when trying to start app. Is app starting up?"
                      descriptor))
@@ -580,7 +580,8 @@
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
   [{:keys [authentication http-options max-conflict-retries max-name-length
            orchestrator-name pod-base-port replicaset-api-version
-           replicaset-spec-file-path service-id->service-description-fn url]}]
+           replicaset-spec-file-path service-id->service-description-fn
+           service-id->password-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
          (utils/non-neg-int? max-conflict-retries)
@@ -603,4 +604,5 @@
                            replicaset-api-version
                            replicaset-spec-file-path
                            service-id->failed-instances-transient-store
+                           service-id->password-fn
                            service-id->service-description-fn)))

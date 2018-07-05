@@ -46,6 +46,7 @@
       :replicaset-api-version "extensions/v1beta1"
       :replicaset-spec-file-path default-rs-spec-path
       :service-id->failed-instances-transient-store (atom {})
+      :service-id->password-fn #(str "password-" %)
       :service-id->service-description-fn (pc/map-from-keys (constantly {"run-as-user" "myself"})
                                                             service-ids)}
      (merge args)
@@ -694,7 +695,6 @@
   ;(create-app-if-new [this service-id->password-fn descriptor]
   (let [service-id "test-service-id"
         service {:service-id service-id}
-        service-id->password-fn (constantly "password")
         descriptor {:service-id service-id
                     :service-description {"backend-proto" "HTTP"
                                           "cmd" "foo"
@@ -709,23 +709,23 @@
         dummy-scheduler (make-dummy-scheduler [service-id])]
     (testing "unsuccessful-create: app already exists"
       (let [actual (with-redefs [service-id->service (constantly service)]
-                     (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+                     (scheduler/create-app-if-new dummy-scheduler descriptor))]
         (is (nil? actual))))
     (with-redefs [service-id->service (constantly nil)]
       (testing "unsuccessful-create: service creation conflict (already running)"
         (let [actual (with-redefs [api-request (fn mocked-api-request [& _]
                                                  (ss/throw+ {:status 409}))]
-                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+                       (scheduler/create-app-if-new dummy-scheduler descriptor))]
         (is (nil? actual))))
       (testing "unsuccessful-create: internal error"
         (let [actual (with-redefs [api-request (fn mocked-api-request [& _]
                                                    (throw-exception))]
-                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+                       (scheduler/create-app-if-new dummy-scheduler descriptor))]
           (is (nil? actual))))
       (testing "successful create"
         (let [actual (with-redefs [api-request (constantly service)
                                    replicaset->Service identity]
-                       (scheduler/create-app-if-new dummy-scheduler service-id->password-fn descriptor))]
+                       (scheduler/create-app-if-new dummy-scheduler descriptor))]
           (is (= service actual)))))))
 
 (deftest test-delete-app
