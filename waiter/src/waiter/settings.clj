@@ -274,7 +274,7 @@
                                    :factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}
-                                   :max-conflict-retries 5
+                                   :max-patch-retries 5
                                    :max-name-length 63
                                    :orchestrator-name "waiter"
                                    :pod-base-port 31000

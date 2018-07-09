@@ -39,7 +39,7 @@
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
    (->
-     {:max-conflict-retries 5
+     {:max-patch-retries 5
       :max-name-length 63
       :orchestrator-name "waiter"
       :pod-base-port 8080
@@ -73,6 +73,48 @@
        (clojure.pprint/pprint
          (clojure.data/diff expected# actual#)))
      (is (= expected# actual#))))
+
+(deftest test-service-id->k8s-app-name
+  (let [sample-uuid "e8b625cc83c411e8974c38d5474b213d"
+        short-sample-uuid (str (subs sample-uuid 0 8)
+                               (subs sample-uuid 24))
+        short-app-name "myapp"
+        long-app-name (apply str (repeat 200 \A))
+        waiter-service-prefix "waiter-service-id-prefix-"]
+  (let [max-name-length 128
+        long-name-scheduler {:max-name-length max-name-length}]
+    (testing "Very long name length limit maps long service-id through unmodified"
+      (let [service-id (str "this_name_is_longer_than_64_chars_but_should_be_unmodified_by_the_mapping_function-"
+                            sample-uuid)]
+        (is (= service-id (service-id->k8s-app-name long-name-scheduler service-id)))))
+    (testing "Very long name length limit maps long service-id through without prefix"
+      (let [service-id (str waiter-service-prefix
+                            "this_name_is_longer_than_64_chars_but_should_be_unmodified_by_the_mapping_function-"
+                            sample-uuid)]
+        (is (= (subs service-id (count waiter-service-prefix))
+               (service-id->k8s-app-name long-name-scheduler service-id)))))
+    (testing "Very long name length limit maps truncates service name, but keeps full uuid"
+      (let [service-id (str waiter-service-prefix long-app-name "-" sample-uuid)]
+        (is (= (str (subs long-app-name 0 (- max-name-length 1 32 1 pod-unique-suffix-length))
+                    "-" sample-uuid)
+               (service-id->k8s-app-name long-name-scheduler service-id))))))
+  (let [max-name-length 32
+        short-name-scheduler {:max-name-length max-name-length}]
+        (assert (== 32 (count sample-uuid)))
+        (assert (== 16 (count short-sample-uuid)))
+        (testing "Short name length limit with short app name only shortens uuid"
+          (let [service-id (str short-app-name "-" sample-uuid)]
+            (is (= (str short-app-name "-" short-sample-uuid)
+                   (service-id->k8s-app-name short-name-scheduler service-id)))))
+        (testing "Short name length limit with short app name only removes prefix, shortens uuid"
+          (let [service-id (str waiter-service-prefix short-app-name "-" sample-uuid)]
+            (is (= (str short-app-name "-" short-sample-uuid)
+                   (service-id->k8s-app-name short-name-scheduler service-id)))))
+        (testing "Short name length limit with long app name truncates app name, removes prefix, and shortens uuid"
+          (let [service-id (str waiter-service-prefix long-app-name "-" sample-uuid)]
+            (is (= (str (subs long-app-name 0 (- max-name-length 1 16 1 pod-unique-suffix-length))
+                        "-" short-sample-uuid)
+                   (service-id->k8s-app-name short-name-scheduler service-id))))))))
 
 (deftest test-scheduler-get-instances
   (let [test-cases [{:name "get-instances no response"
@@ -809,7 +851,7 @@
   (let [base-config {:authentication nil
                      :http-options {:conn-timeout 10000
                                     :socket-timeout 10000}
-                     :max-conflict-retries 5
+                     :max-patch-retries 5
                      :max-name-length 63
                      :orchestrator-name "waiter"
                      :pod-base-port 8080
@@ -827,7 +869,7 @@
           (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :conn-timeout] 0))))
           (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :socket-timeout] 0)))))
         (testing "bad max conflict retries"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-conflict-retries -1)))))
+          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-patch-retries -1)))))
         (testing "bad max name length"
           (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-name-length 0)))))
         (testing "bad ReplicaSet spec path"

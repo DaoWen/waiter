@@ -57,10 +57,17 @@
 ;; Kubernetes Pods have a unique 5-character alphanumeric suffix preceded by a hyphen.
 (def ^:const pod-unique-suffix-length 5)
 
-(defn- service-id->k8s-app-name [{:keys [max-name-length] :as scheduler} service-id]
+(defn service-id->k8s-app-name [{:keys [max-name-length] :as scheduler} service-id]
   "Shorten a full Waiter service-id to a Kubernetes-compatible application name.
    May return the service-id unmodified if it doesn't violate the
-   configured name-length restrictions for this Kubernetes cluster."
+   configured name-length restrictions for this Kubernetes cluster.
+
+   Example:
+
+   (service-id->k8s-app-name
+     {:max-name-length 32}
+     \"waiter-myapp-e8b625cc83c411e8974c38d5474b213d\")
+   ==> \"myapp-e8b625cc474b213d\""
   (let [[_ app-prefix x y z] (re-find #"([^-]+)-(\w{8})(\w+)(\w{8})$" service-id)
         k8s-max-name-length (- max-name-length pod-unique-suffix-length 1)
         suffix (if (use-short-service-hash? k8s-max-name-length)
@@ -140,8 +147,7 @@
   (try
     (let [port0 (get-in pod [:spec :containers 0 :ports 0 :containerPort])]
       (scheduler/make-ServiceInstance
-        {
-         :extra-ports (->> (get-in pod [:metadata :annotations :waiter-port-count])
+        {:extra-ports (->> (get-in pod [:metadata :annotations :waiter-port-count])
                            Integer/parseInt range next (mapv #(+ port0 %)))
          :healthy? (get-in pod [:status :containerStatuses 0 :ready] false)
          :host (get-in pod [:status :podIP])
@@ -278,35 +284,50 @@
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
    Only used for upward scaling. No-op if it would result in downward scaling."
-  [{:keys [http-client max-conflict-retries] :as scheduler} service instances']
+  [{:keys [http-client max-patch-retries] :as scheduler} service instances']
   (let [replicaset-url (build-replicaset-url scheduler service)]
     (loop [attempt 1
            instances (:instances service)]
       (if (<= instances' instances)
-        (log/info "Skipping non-upward scale-up request on" (:id service)
+        (log/warn "Skipping non-upward scale-up request on" (:id service)
                   "from" instances "to" instances')
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
-          (<= attempt max-conflict-retries)
+          (<= attempt max-patch-retries)
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- scale-service-by-delta
   "Scale the number of instances for a given service by a given delta.
    Can scale either upward (positive delta) or downward (negative delta)."
-  [{:keys [http-client max-conflict-retries] :as scheduler} service instances-delta]
+  [{:keys [http-client max-patch-retries] :as scheduler} service instances-delta]
   (let [replicaset-url (build-replicaset-url scheduler service)]
     (loop [attempt 1
            instances (:instances service)]
       (let [instances' (+ instances instances-delta)]
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
-          (<= attempt max-conflict-retries)
+          (<= attempt max-patch-retries)
           (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
 
 (defn- kill-service-instance
   "Safely kill the Kubernetes pod corresponding to the given Waiter Service Instance.
    Returns nil on success, but throws on failure."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id namespace pod-name service-id] :as instance} service]
+  ;; SAFE DELETION STRATEGY:
+  ;; 1) Delete the target pod with a grace period of 5 minutes
+  ;;    Since the target pod is currently in the "Terminating" state,
+  ;;    the owner ReplicaSet will not immediately create a replacement pod.
+  ;; 2) Scale down the owner ReplicaSet by 1 pod.
+  ;;    Since the target pod is still in the "Terminating" state (assuming delay < 5min),
+  ;;    the owner ReplicaSet will not immediately delete a different victim pod.
+  ;; 3) Force-delete the target pod. This immediately removes the pod from Kubernetes.
+  ;;    The state of the ReplicaSet (desired vs actual pods) should now be consistent.
+  ;;    We want to eagerly delete the pod to short-circuit the 5-minute delay from above.
+  ;; Note that if it takes more than 5 minutes to get from step 1 to step 2,
+  ;; we assume we're already so far out of sync that the possibility of non-atomic scaling
+  ;; doesn't hurt us significantly. If it takes more than 5 minutes to get from step 1
+  ;; to step 3, then the pod was already deleted, and the force-delete is no longer needed.
+  ;; The force-delete can fail with a 404 (object not found), but this operation still succeeds.
   (let [pod-url (str api-server-url
                      "/api/v1/namespaces/"
                      namespace
@@ -345,8 +366,11 @@
   (let [home-path (str "/home/" run-as-user)
         common-env (scheduler/environment service-id service-description
                                           service-id->password-fn home-path)
-        port0 pod-base-port
-        template-env (into [;; We set these two "MESOS_*" variables to improve interoperability
+        ;; Randomize $PORT0 value to ensure clients can't hardcode it.
+        ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
+        port0 (-> (rand-int 100) (* 10) (+ pod-base-port))
+        template-env (into [;; We set these two "MESOS_*" variables to improve interoperability.
+                            ;; New clients should prefer using WAITER_SANDBOX.
                             {:name "MESOS_DIRECTORY" :value home-path}
                             {:name "MESOS_SANDBOX" :value home-path}]
                            (concat
@@ -399,18 +423,27 @@
 (defn- delete-service
   "Delete the Kubernetes ReplicaSet corresponding to a Waiter Service.
    Ensures that all controlled Pods are deleted before removing the ReplicaSet.
-   This operation will leave Waiter in a sane state on a failure."
+   This operation will leave Waiter in a sane state on a failure,
+   unless Waiter loses access to the Kubernetes API server during the operation
+   (see issue #999 on GitHub)."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id] :as service}]
   (let [replicaset-url (build-replicaset-url scheduler service)]
     (patch-object-json replicaset-url http-client
                        [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
                         {:op :replace :path "/spec/replicas" :value 0}])
-    (doseq [pod (get-replicaset-pods scheduler service)]
-      (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
-        (api-request http-client pod-url :request-method :delete)))
-    (api-request http-client replicaset-url :request-method :delete)
-    {:message (str "Kubernetes deleted ReplicaSet for " id)
-     :result :deleted}))
+    (try
+      (doseq [pod (get-replicaset-pods scheduler service)]
+        (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
+          (api-request http-client pod-url :request-method :delete)))
+      (api-request http-client replicaset-url :request-method :delete)
+      {:message (str "Kubernetes deleted ReplicaSet for " id)
+       :result :deleted}
+      (catch Exception e
+        (let [msg (str "Error deleting ReplicaSet for " id)]
+          (log/error e msg)
+          (patch-object-json replicaset-url http-client
+                             [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "live"}])
+          {:message msg :result :error})))))
 
 (defn service-id->service
   "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
@@ -419,21 +452,22 @@
            service-id->service-description-fn] :as scheduler}
    service-id]
   (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-    (let [replicasets (->> (str api-server-url "/apis/" replicaset-api-version
-                                "/namespaces/" service-ns
-                                "/replicasets?labelSelector=managed-by=" orchestrator-name
-                                ",app=" (service-id->k8s-app-name scheduler service-id))
-                           (api-request http-client)
-                           :items)]
-      (when (seq replicasets)
-        (when (second replicasets)
-          (log/warn "Multiple matches found for Waiter Service"
-                    service-id replicasets))
-        (-> replicasets first replicaset->Service)))))
+    (->> (str api-server-url "/apis/" replicaset-api-version
+              "/namespaces/" service-ns
+              "/replicasets?labelSelector=managed-by=" orchestrator-name
+              ",app=" (service-id->k8s-app-name scheduler service-id))
+         (api-request http-client)
+         :items
+         ;; It's possible that multiple Waiter services in different namespaces
+         ;; have service-ids mapping to the same Kubernetes object name,
+         ;; so we filter to match the full service-id as well.
+         (filter #(= service-id (get-in % [:metadata :annotations :waiter-service-id])))
+         first
+         replicaset->Service)))
 
 ; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
-                                max-conflict-retries
+                                max-patch-retries
                                 max-name-length
                                 orchestrator-name
                                 pod-base-port
@@ -560,31 +594,31 @@
 (defn- start-auth-renewer
   "Initialize the k8s-api-auth-str atom,
    and optionally start a chime to periodically referesh the value."
-  [{:keys [refresh-delay-minutes refresh-fn]}]
-  {:pre [(or (nil? refresh-delay-minutes)
-             (utils/pos-int? refresh-delay-minutes))
+  [{:keys [refresh-delay-mins refresh-fn]}]
+  {:pre [(or (nil? refresh-delay-mins)
+             (utils/pos-int? refresh-delay-mins))
          (fn? refresh-fn)]}
   (let [refresh (-> refresh-fn utils/resolve-symbol deref)
         auth-update-fn (fn auth-update []
                          (if-let [auth-str' (refresh)]
                            (reset! k8s-api-auth-str auth-str')))]
     (auth-update-fn)
-    (when [refresh-delay-minutes]
+    (when [refresh-delay-mins]
       (du/start-timer-task
-        (t/minutes refresh-delay-minutes)
+        (t/minutes refresh-delay-mins)
         auth-update-fn
-        :delay-ms (* 60000 refresh-delay-minutes)))))
+        :delay-ms (* 60000 refresh-delay-mins)))))
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
-  [{:keys [authentication http-options max-conflict-retries max-name-length
+  [{:keys [authentication http-options max-patch-retries max-name-length
            orchestrator-name pod-base-port replicaset-api-version
            replicaset-spec-file-path service-id->service-description-fn
            service-id->password-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
-         (utils/non-neg-int? max-conflict-retries)
+         (utils/non-neg-int? max-patch-retries)
          (utils/pos-int? max-name-length)
          (not (string/blank? orchestrator-name))
          (integer? pod-base-port)
@@ -597,7 +631,7 @@
     (when authentication
       (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
-                           max-conflict-retries
+                           max-patch-retries
                            max-name-length
                            orchestrator-name
                            pod-base-port
