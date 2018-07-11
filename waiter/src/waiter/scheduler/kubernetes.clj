@@ -404,12 +404,9 @@
         edn-opts {:readers {'waiter/param params
                             'waiter/param-str (comp str params)}}]
     (try
-      (-> (->> replicaset-spec-file-path
-               slurp
-               (edn/read-string edn-opts))
-          ;; Since K8s uses the minimum of the pod's terminationGracePeriodSeconds (default 30 secs)
-          ;; and the gracePeriodSeconds set in DeleteOptions, we need to override this setting.
-          (assoc-in [:spec :template :spec :terminationGracePeriodSeconds] delete-delay-secs))
+      (->> replicaset-spec-file-path
+           slurp
+           (edn/read-string edn-opts))
       (catch Throwable e
         (log/error e "Error creating ReplicaSet specification for" service-id)
         (throw e)))))
