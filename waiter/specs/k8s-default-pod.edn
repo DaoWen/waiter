@@ -3,8 +3,7 @@
  :metadata {:name #waiter/param :k8s-name
             :labels {:app #waiter/param :k8s-name
                      :managed-by #waiter/param :orchestrator-name}
-            :annotations {:waiter-app-status "live"
-                          :waiter-service-id #waiter/param :service-id}}
+            :annotations {:waiter-service-id #waiter/param :service-id}}
  :spec {:replicas #waiter/param :min-instances
         :selector {:matchLabels {:app #waiter/param :k8s-name
                                  :managed-by #waiter/param :orchestrator-name}}

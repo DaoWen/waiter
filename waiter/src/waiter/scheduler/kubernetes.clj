@@ -33,6 +33,9 @@
   (log/info "Called waiter.scheduler.kubernetes/authorization-from-environment")
   (System/getenv "WAITER_K8S_AUTH_STRING"))
 
+;; We use a 5-minute grace period on pods to enable manual victim selection on scale-down
+(def ^:const delete-delay-secs 300)
+
 (def k8s-api-auth-str
   "Atom containing authentication string for the Kubernetes API server.
    This value may be periodically refreshed asynchronously."
@@ -249,8 +252,7 @@
   "Update the replica count in the given Kubernetes object's spec."
   [k8s-object-uri http-client replicas replicas']
   (patch-object-json http-client k8s-object-uri
-                     [{:op :test :path "/metadata/annotations/waiter-app-status" :value "live"}
-                      {:op :test :path "/spec/replicas" :value replicas}
+                     [{:op :test :path "/spec/replicas" :value replicas}
                       {:op :replace :path "/spec/replicas" :value replicas'}]))
 
 (defn- get-replica-count
@@ -334,7 +336,7 @@
                      "/pods/"
                      pod-name)
         base-body {:kind "DeleteOptions" :apiVersion "v1"}
-        term-json (-> base-body (assoc :gracePeriodSeconds 300) (json/write-str))
+        term-json (-> base-body (assoc :gracePeriodSeconds delete-delay-secs) (json/write-str))
         kill-json (-> base-body (assoc :gracePeriodSeconds 0) (json/write-str))
         make-kill-response (fn [killed? message status]
                              {:instance-id id :killed? killed?
@@ -402,7 +404,12 @@
         edn-opts {:readers {'waiter/param params
                             'waiter/param-str (comp str params)}}]
     (try
-      (->> replicaset-spec-file-path slurp (edn/read-string edn-opts))
+      (->> replicaset-spec-file-path
+           slurp
+           (edn/read-string edn-opts)
+           ;; Since K8s uses the minimum of the pod's terminationGracePeriodSeconds (default 30 secs)
+           ;; and the gracePeriodSeconds set in DeleteOptions, we need to override this setting.
+           (assoc-in [:spec :template :spec :terminationGracePeriodSeconds] delete-delay-secs))
       (catch Throwable e
         (log/error e "Error creating ReplicaSet specification for" service-id)
         (throw e)))))
@@ -422,28 +429,23 @@
 
 (defn- delete-service
   "Delete the Kubernetes ReplicaSet corresponding to a Waiter Service.
-   Ensures that all controlled Pods are deleted before removing the ReplicaSet.
-   This operation will leave Waiter in a sane state on a failure,
-   unless Waiter loses access to the Kubernetes API server during the operation
-   (see issue #999 on GitHub)."
+   All controlled Pods are also removed deleted in a timely manner.
+   This operation will leave Waiter in a sane state on a failure."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id] :as service}]
-  (let [replicaset-url (build-replicaset-url scheduler service)]
-    (patch-object-json replicaset-url http-client
-                       [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "killed"}
-                        {:op :replace :path "/spec/replicas" :value 0}])
-    (try
-      (doseq [pod (get-replicaset-pods scheduler service)]
-        (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
-          (api-request http-client pod-url :request-method :delete)))
-      (api-request http-client replicaset-url :request-method :delete)
-      {:message (str "Kubernetes deleted ReplicaSet for " id)
-       :result :deleted}
-      (catch Exception e
-        (let [msg (str "Error deleting ReplicaSet for " id)]
-          (log/error e msg)
-          (patch-object-json replicaset-url http-client
-                             [{:op :replace :path "/metadata/annotations/waiter-app-status" :value "live"}])
-          {:message msg :result :error})))))
+  (let [replicaset-url (build-replicaset-url scheduler service)
+        owned-pods (get-replicaset-pods scheduler service)
+        base-body {:kind "DeleteOptions" :apiVersion "v1"}
+        pod-kill-json (-> base-body (assoc :gracePeriodSeconds 0) (json/write-str))
+        rs-kill-json (-> base-body (assoc :propagationPolicy "Background") (json/write-str))]
+    (api-request http-client replicaset-url :request-method :delete :body rs-kill-json)
+    (doseq [pod owned-pods]
+      (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
+        (try
+          (api-request http-client pod-url :request-method :delete :body pod-kill-json)
+          (catch Exception e
+            (log/warn e "Error eagerly deleting orphaned pod at " pod-url " for " id)))))
+    {:message (str "Kubernetes deleted ReplicaSet for " id)
+     :result :deleted}))
 
 (defn service-id->service
   "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
