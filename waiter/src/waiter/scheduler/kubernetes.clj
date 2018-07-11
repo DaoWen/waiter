@@ -404,12 +404,12 @@
         edn-opts {:readers {'waiter/param params
                             'waiter/param-str (comp str params)}}]
     (try
-      (->> replicaset-spec-file-path
-           slurp
-           (edn/read-string edn-opts)
-           ;; Since K8s uses the minimum of the pod's terminationGracePeriodSeconds (default 30 secs)
-           ;; and the gracePeriodSeconds set in DeleteOptions, we need to override this setting.
-           (assoc-in [:spec :template :spec :terminationGracePeriodSeconds] delete-delay-secs))
+      (-> (->> replicaset-spec-file-path
+               slurp
+               (edn/read-string edn-opts))
+          ;; Since K8s uses the minimum of the pod's terminationGracePeriodSeconds (default 30 secs)
+          ;; and the gracePeriodSeconds set in DeleteOptions, we need to override this setting.
+          (assoc-in [:spec :template :spec :terminationGracePeriodSeconds] delete-delay-secs))
       (catch Throwable e
         (log/error e "Error creating ReplicaSet specification for" service-id)
         (throw e)))))
@@ -442,8 +442,8 @@
       (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
         (try
           (api-request http-client pod-url :request-method :delete :body pod-kill-json)
-          (catch Exception e
-            (log/warn e "Error eagerly deleting orphaned pod at " pod-url " for " id)))))
+          (catch Throwable t
+            (log/warn t "Error eagerly deleting orphaned pod at " pod-url " for " id)))))
     {:message (str "Kubernetes deleted ReplicaSet for " id)
      :result :deleted}))
 
@@ -454,18 +454,18 @@
            service-id->service-description-fn] :as scheduler}
    service-id]
   (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-    (->> (str api-server-url "/apis/" replicaset-api-version
-              "/namespaces/" service-ns
-              "/replicasets?labelSelector=managed-by=" orchestrator-name
-              ",app=" (service-id->k8s-app-name scheduler service-id))
-         (api-request http-client)
-         :items
-         ;; It's possible that multiple Waiter services in different namespaces
-         ;; have service-ids mapping to the same Kubernetes object name,
-         ;; so we filter to match the full service-id as well.
-         (filter #(= service-id (get-in % [:metadata :annotations :waiter-service-id])))
-         first
-         replicaset->Service)))
+    (some->> (str api-server-url "/apis/" replicaset-api-version
+                  "/namespaces/" service-ns
+                  "/replicasets?labelSelector=managed-by=" orchestrator-name
+                  ",app=" (service-id->k8s-app-name scheduler service-id))
+             (api-request http-client)
+             :items
+             ;; It's possible that multiple Waiter services in different namespaces
+             ;; have service-ids mapping to the same Kubernetes object name,
+             ;; so we filter to match the full service-id as well.
+             (filter #(= service-id (get-in % [:metadata :annotations :waiter-service-id])))
+             first
+             replicaset->Service)))
 
 ; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
@@ -541,16 +541,11 @@
         (scheduler/remove-killed-instances-for-service! service-id)
         delete-result)
       (catch [:status 404] _
-        (log/warn "[delete-app] Service does not exist:" service-id)
+        (log/warn "Service does not exist:" service-id)
         {:result :no-such-service-exists
          :message "Kubernetes reports service does not exist"})
-      (catch [:status 409] _
-        (log/warn "Kubernetes ReplicaSet conflict while deleting"
-                  {:service-id service-id})
-        {:result :conflict
-         :message "Kubernetes ReplicaSet conflict while deleting"})
       (catch Throwable e
-        (log/warn "Kubernetes ReplicaSet conflict while deleting"
+        (log/warn "Internal error while deleting service"
                   {:service-id service-id})
         {:result :error
          :message "Internal error while deleting service"})))

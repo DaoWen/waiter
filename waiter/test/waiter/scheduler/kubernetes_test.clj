@@ -334,8 +334,7 @@
                                :namespace "myself"
                                :labels {:app "test-app-1234"
                                         :managed-by "waiter"}
-                               :annotations {:waiter-app-status "live"
-                                             :waiter-service-id "test-app-1234"}}
+                               :annotations {:waiter-service-id "test-app-1234"}}
                     :spec {:replicas 2
                            :selector {:matchLabels {:app "test-app-1234"
                                                     :managed-by "waiter"}}}
@@ -346,8 +345,7 @@
                                :namespace "myself"
                                :labels {:app "test-app-6789"
                                         :managed-by "waiter"}
-                               :annotations {:waiter-app-status "live"
-                                             :waiter-service-id "test-app-6789"}}
+                               :annotations {:waiter-service-id "test-app-6789"}}
                     :spec {:replicas 3
                            :selector {:matchLabels {:app "test-app-6789"
                                                     :managed-by "waiter"}}}
@@ -370,8 +368,7 @@
                                :namespace "myself"
                                :labels {:app "test-app-9999"
                                         :managed-by "waiter"}
-                               :annotations {:waiter-app-status "killed"
-                                             :waiter-service-id "test-app-9999"}}
+                               :annotations {:waiter-service-id "test-app-9999"}}
                     :spec {:replicas 0
                            :selector {:matchLabels {:app "test-app-9999"
                                                     :managed-by "waiter"}}}
@@ -399,8 +396,7 @@
                              :namespace "myself"
                              :labels {:app "test-app-1234"
                                       :managed-by "waiter"}
-                             :annotations {:waiter-app-status "live"
-                                           :waiter-service-id "test-app-1234"}}
+                             :annotations {:waiter-service-id "test-app-1234"}}
                   :spec {:replicas 2
                          :selector {:matchLabels {:app "test-app-1234"
                                                   :managed-by "waiter"}}}
@@ -411,8 +407,7 @@
                              :namespace "myself"
                              :labels {:app "test-app-6789"
                                       :managed-by "waiter"}
-                             :annotations {:waiter-app-status "live"
-                                           :waiter-service-id "test-app-6789"}}
+                             :annotations {:waiter-service-id "test-app-6789"}}
                   :spec {:replicas 3
                          :selector {:matchLabels {:app "test-app-6789"
                                                   :managed-by "waiter"}}}
@@ -645,8 +640,7 @@
                              :namespace "myself"
                              :labels {:app service-id
                                       :managed-by "waiter"}
-                             :annotations {:waiter-app-status "live"
-                                           :waiter-service-id service-id}}
+                             :annotations {:waiter-service-id service-id}}
                   :spec {:replicas 2
                          :selector {:matchLabels {:app service-id
                                                   :managed-by "waiter"}}}
@@ -734,7 +728,6 @@
         (is (= [] (scheduler/service-id->killed-instances "service-3")))))))
 
 (deftest test-create-app
-  ;(create-app-if-new [this service-id->password-fn descriptor]
   (let [service-id "test-service-id"
         service {:service-id service-id}
         descriptor {:service-id service-id
@@ -788,15 +781,6 @@
                        (scheduler/delete-app dummy-scheduler service-id))]
           (is (= {:message "Kubernetes reports service does not exist"
                   :result :no-such-service-exists}
-                 actual))))
-      (testing "unsuccessful-delete: patch conflict"
-        (let [actual (with-redefs [api-request (fn mocked-api-request [_ url & {:keys [request-method]}]
-                                                 (if (= request-method :patch)
-                                                   (ss/throw+ {:status 409})
-                                                   {:spec {:replicas 1}}))]
-                       (scheduler/delete-app dummy-scheduler service-id))]
-          (is (= {:message "Kubernetes ReplicaSet conflict while deleting"
-                  :result :conflict}
                  actual))))
       (testing "unsuccessful-delete: internal error"
         (let [actual (with-redefs [api-request (fn [& _] (throw-exception))]
