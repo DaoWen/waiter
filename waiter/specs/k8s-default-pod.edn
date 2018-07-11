@@ -35,4 +35,5 @@
                                                              :memory #waiter/param :memory}
                                                     :requests {:cpu #waiter/param :cpus
                                                                :memory #waiter/param :memory}}
-                                        :workingDir #waiter/param :home-path}]}}}}
+                                        :workingDir #waiter/param :home-path}]
+                          :terminationGracePeriodSeconds 0}}}}
