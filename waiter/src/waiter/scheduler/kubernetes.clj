@@ -314,7 +314,7 @@
 (defn- kill-service-instance
   "Safely kill the Kubernetes pod corresponding to the given Waiter Service Instance.
    Returns nil on success, but throws on failure."
-  [{:keys [api-server-url http-client] :as scheduler} {:keys [id namespace pod-name service-id] :as instance} service]
+  [{:keys [api-server-url http-client] :as scheduler} {:keys [id k8s/namespace k8s/pod-name service-id] :as instance} service]
   ;; SAFE DELETION STRATEGY:
   ;; 1) Delete the target pod with a grace period of 5 minutes
   ;;    Since the target pod is currently in the "Terminating" state,
