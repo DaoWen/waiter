@@ -360,7 +360,7 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [orchestrator-name pod-base-port replicaset-api-version
+  [{:keys [edn-readers orchestrator-name pod-base-port replicaset-api-version
            replicaset-spec-file-path service-id->password-fn] :as scheduler}
    service-id
    {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
@@ -401,8 +401,10 @@
                       :ssl? (= "https" backend-proto)}
                      (for [i (range ports)]
                        [(keyword (str "port" i)) (+ port0 i)]))
-        edn-opts {:readers {'waiter/param params
-                            'waiter/param-str (comp str params)}}]
+        edn-opts {:readers (merge
+                             {'waiter/param params
+                              'waiter/param-str (comp str params)}
+                             edn-readers)}]
     (try
       (->> replicaset-spec-file-path
            slurp
@@ -458,6 +460,7 @@
 
 ; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
+                                edn-readers
                                 max-patch-retries
                                 max-name-length
                                 orchestrator-name
@@ -598,7 +601,7 @@
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
-  [{:keys [authentication http-options max-patch-retries max-name-length
+  [{:keys [authentication edn-readers http-options max-patch-retries max-name-length
            orchestrator-name pod-base-port replicaset-api-version
            replicaset-spec-file-path service-id->service-description-fn
            service-id->password-fn url]}]
@@ -617,6 +620,8 @@
     (when authentication
       (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
+                           (pc/map-vals (comp deref utils/resolve-symbol)
+                                        edn-readers)
                            max-patch-retries
                            max-name-length
                            orchestrator-name

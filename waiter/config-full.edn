@@ -288,6 +288,10 @@
                                                   ;; The sample function given below simply returns the string from the WAITER_K8S_AUTH_STRING environment variable.
                                                   :refresh-fn waiter.scheduler.kubernetes/authorization-from-environment}
 
+                                 :edn-readers {;; Optional map of symbol -> symbol, where the keys are reader macro names for use in parsing specs in EDN format
+                                               ;; (see :replicaset-spec-file-path below), and the values are the symbols for corresponding function implementations.
+                                               waiter/stringify clojure.core/str}
+
                                  ;; HTTP options that will be used when accessing the Kubernetes API:
                                  :http-options {:conn-timeout 10000
                                                 :socket-timeout 10000}

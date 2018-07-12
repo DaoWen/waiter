@@ -270,7 +270,7 @@
              :inter-kill-request-wait-time-ms 1000}
    :scheduler-config {:kind :marathon
                       :kubernetes {; Default values are not provided below for the following keys:
-                                   ; :authentication :replicaset-spec-file-path :url
+                                   ; :authentication :edn-readers :replicaset-spec-file-path :url
                                    :factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}
