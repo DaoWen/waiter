@@ -426,26 +426,13 @@
 
 (defn- delete-service
   "Delete the Kubernetes ReplicaSet corresponding to a Waiter Service.
-   All controlled Pods are also removed deleted in a timely manner.
-   This operation will leave Waiter in a sane state on a failure."
+   Owned Pods will be removed asynchronously by the Kubernetes garbage collector."
   [{:keys [api-server-url http-client] :as scheduler} {:keys [id] :as service}]
   (let [replicaset-url (build-replicaset-url scheduler service)
-        owned-pods (get-replicaset-pods scheduler service)
-        base-body {:kind "DeleteOptions" :apiVersion "v1"}
-        rs-kill-json (-> base-body (assoc :propagationPolicy "Background") (json/write-str))
-        pod-kill-json (-> base-body (assoc :gracePeriodSeconds 0) (json/write-str))]
-    ;; Delete the ReplicaSet
-    (api-request http-client replicaset-url :request-method :delete :body rs-kill-json)
-    ;; Eagerly delete the Pods owned by the ReplicaSet,
-    ;; otherwise the 5 minute grace period will tie up the resources for a while
-    ;; (but all pods *will* get cleaned up within a few minutes even if some of these deletes fail).
-    (doseq [pod owned-pods]
-      (let [pod-url (->> pod :metadata :selfLink (str api-server-url))]
-        (try
-          (api-request http-client pod-url :request-method :delete :body pod-kill-json)
-          (catch Throwable t
-            (log/warn t "Error eagerly deleting orphaned pod at " pod-url " for " id)))))
-    ;; Success! (only gets here if the ReplicaSet :delete request didn't fail and throw)
+        kill-json (json/write-str
+                    {:kind "DeleteOptions" :apiVersion "v1"
+                     :propagationPolicy "Background"})]
+    (api-request http-client replicaset-url :request-method :delete :body kill-json)
     {:message (str "Kubernetes deleted ReplicaSet for " id)
      :result :deleted}))
 
