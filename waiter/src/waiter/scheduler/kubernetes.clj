@@ -33,9 +33,6 @@
   (log/info "Called waiter.scheduler.kubernetes/authorization-from-environment")
   (System/getenv "WAITER_K8S_AUTH_STRING"))
 
-;; We use a 5-minute grace period on pods to enable manual victim selection on scale-down
-(def ^:const delete-delay-secs 300)
-
 (def k8s-api-auth-str
   "Atom containing authentication string for the Kubernetes API server.
    This value may be periodically refreshed asynchronously."
@@ -336,7 +333,9 @@
                      "/pods/"
                      pod-name)
         base-body {:kind "DeleteOptions" :apiVersion "v1"}
-        term-json (-> base-body (assoc :gracePeriodSeconds delete-delay-secs) (json/write-str))
+        ;; we use a 5-minute (300s) grace period on pods to enable manual victim selection on scale-down
+        term-json (-> base-body (assoc :gracePeriodSeconds 300) (json/write-str))
+        ;; setting the grace period to 0 seconds results in an immediate SIGKILL to the pod
         kill-json (-> base-body (assoc :gracePeriodSeconds 0) (json/write-str))
         make-kill-response (fn [killed? message status]
                              {:instance-id id :killed? killed?
