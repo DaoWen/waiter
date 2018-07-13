@@ -30,7 +30,7 @@
   "Sample implementation of the authentication string refresh function.
    Returns a string to be used as the value for the Authorization HTTP header,
    reading the string from the WAITER_K8S_AUTH_STRING environment variable."
-  (log/info "Called waiter.scheduler.kubernetes/authorization-from-environment")
+  (log/info "called waiter.scheduler.kubernetes/authorization-from-environment")
   (System/getenv "WAITER_K8S_AUTH_STRING"))
 
 (def k8s-api-auth-str
@@ -110,11 +110,11 @@
 
 (defn- killed-by-k8s?
   "Determine whether a pod was killed (restarted) by its corresponding Kubernetes liveness checks."
-  [pod-terminated-info]
+  [{:keys [exitCode reason] :as pod-terminated-info}]
   ;; TODO (#351) - Look at events for messages about liveness probe failures.
   ;; Currently, we assume any SIGKILL (137) with the default "Error" reason was a livenessProbe kill.
-  (and (= 137 (:exitCode pod-terminated-info))
-       (= "Error" (:reason pod-terminated-info))))
+  (and (= 137 exitCode)
+       (= "Error" reason)))
 
 (defn- track-failed-instances!
   "Update this KubernetesScheduler's service-id->failed-instances-transient-store
@@ -129,15 +129,15 @@
           newest-failure-id (pod->instance-id pod (dec restart-count))
           failures (-> service-id->failed-instances-transient-store deref (get service-id))]
       (when-not (contains? failures newest-failure-id)
-        (let [newest-failure-instance (merge live-instance
-                                             ;; To match the behavior of the marathon scheduler,
-                                             ;; we don't include the exit code in failed instances that were killed by k8s.
-                                             (when-not (killed-by-k8s? newest-failure)
-                                               {:exit-code (:exitCode newest-failure)})
-                                             {:flags failure-flags
-                                              :healthy? false
-                                              :id newest-failure-id
-                                              :started-at newest-failure-start-time})]
+        (let [newest-failure-instance (cond-> (assoc live-instance
+                                                     :flags failure-flags
+                                                     :healthy? false
+                                                     :id newest-failure-id
+                                                     :started-at newest-failure-start-time)
+                                        ;; To match the behavior of the marathon scheduler,
+                                        ;; we don't include the exit code in failed instances that were killed by k8s.
+                                        (killed-by-k8s? newest-failure)
+                                        (assoc :exit-code :exitCode newest-failure))]
           (swap! service-id->failed-instances-transient-store
                  update-in [service-id] assoc newest-failure-id newest-failure-instance))))))
 
@@ -164,7 +164,7 @@
                          (get-in [:status :startTime])
                          (timestamp-str->datetime))}))
     (catch Throwable e
-      (log/error e "Error converting pod to waiter service instance" pod)
+      (log/error e "error converting pod to waiter service instance" pod)
       (comment "Returning nil on failure."))))
 
 (defn api-request
@@ -172,7 +172,7 @@
    If data is provided via :body, the application/json content type is added automatically.
    The response payload (if any) is automatically parsed to JSON."
   [client url & {:keys [body content-type request-method] :as options}]
-  (scheduler/log "Making request to K8s API server:" url request-method body)
+  (scheduler/log "making request to K8s API server:" url request-method body)
   (ss/try+
     (let [auth-str @k8s-api-auth-str
           result (pc/mapply http-utils/http-request client url
@@ -180,12 +180,12 @@
                             (cond-> options
                               auth-str (assoc-in [:headers "Authorization"] auth-str)
                               (and (not content-type ) body) (assoc :content-type "application/json")))]
-      (scheduler/log "Response from K8s API server:" (json/write-str result))
+      (scheduler/log "response from K8s API server:" (json/write-str result))
       result)
     (catch [:status 400] _
-      (log/error "Malformed K8s API request: " url options))
+      (log/error "malformed K8s API request: " url options))
     (catch [:client client] response
-      (log/error "Request to K8s API server failed: " url options body response)
+      (log/error "request to K8s API server failed: " url options body response)
       (ss/throw+ response))))
 
 (defn- service-description->namespace
@@ -288,7 +288,7 @@
     (loop [attempt 1
            instances (:instances service)]
       (if (<= instances' instances)
-        (log/warn "Skipping non-upward scale-up request on" (:id service)
+        (log/warn "skipping non-upward scale-up request on" (:id service)
                   "from" instances "to" instances')
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
@@ -519,7 +519,7 @@
       (ss/try+
         (create-service descriptor this)
         (catch [:status 409] _
-          (log/error "Conflict status when trying to start app. Is app starting up?"
+          (log/error "conflict status when trying to start app. Is app starting up?"
                      descriptor))
         (catch Throwable e
           (log/error e "Error starting new app." descriptor)))))
@@ -532,11 +532,11 @@
         (scheduler/remove-killed-instances-for-service! service-id)
         delete-result)
       (catch [:status 404] _
-        (log/warn "Service does not exist:" service-id)
+        (log/warn "service does not exist:" service-id)
         {:result :no-such-service-exists
          :message "Kubernetes reports service does not exist"})
       (catch Throwable e
-        (log/warn "Internal error while deleting service"
+        (log/warn "internal error while deleting service"
                   {:service-id service-id})
         {:result :error
          :message "Internal error while deleting service"})))
@@ -551,7 +551,7 @@
            :result :scaled
            :message (str "Scaled to " scale-to-instances)})
         (do
-          (log/error "Cannot scale missing service" service-id)
+          (log/error "cannot scale missing service" service-id)
           {:success false
            :status 404
            :result :no-such-service-exists
