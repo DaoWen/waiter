@@ -271,6 +271,8 @@
    :scheduler-config {:kind :marathon
                       :kubernetes {; Default values are not provided below for the following keys:
                                    ; :authentication :edn-readers :replicaset-spec-file-path :url
+                                   :edn-params {:fn 'waiter.scheduler.kubernetes/options-as-params
+                                                :options nil}
                                    :factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}

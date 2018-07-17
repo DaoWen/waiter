@@ -33,6 +33,12 @@
   (log/info "called waiter.scheduler.kubernetes/authorization-from-environment")
   (System/getenv "WAITER_K8S_AUTH_STRING"))
 
+(defn options-as-params
+  "Sample implementation of the edn-params function, which ignores the base parameters,
+   and returns the options map as a new map of extra parameters for the #waiter/param EDN reader."
+  [params options]
+  options)
+
 (def k8s-api-auth-str
   "Atom containing authentication string for the Kubernetes API server.
    This value may be periodically refreshed asynchronously."
@@ -359,7 +365,7 @@
 
 (defn- service-spec
   "Creates a Kubernetes ReplicaSet spec (with an embedded Pod spec) for the given Waiter Service."
-  [{:keys [edn-readers orchestrator-name pod-base-port replicaset-api-version
+  [{:keys [edn-params-fn edn-readers orchestrator-name pod-base-port replicaset-api-version
            replicaset-spec-file-path service-id->password-fn] :as scheduler}
    service-id
    {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
@@ -379,27 +385,29 @@
                                {:name k :value v})
                              (for [i (range ports)]
                                {:name (str "PORT" i) :value (str (+ port0 i))})))
-        params (into {:k8s-name (service-id->k8s-app-name scheduler service-id)
-                      :backend-protocol backend-proto
-                      :backend-protocol-caps (string/upper-case backend-proto)
-                      :cmd cmd
-                      :cpus cpus
-                      :env template-env
-                      :grace-period-secs grace-period-secs
-                      :health-check-interval-secs health-check-interval-secs
-                      :health-check-max-consecutive-failures health-check-max-consecutive-failures
-                      :health-check-url (sd/service-description->health-check-url service-description)
-                      :home-path home-path
-                      :memory  (str mem "Mi")
-                      :min-instances min-instances
-                      :orchestrator-name orchestrator-name
-                      :port-count ports
-                      :replicaset-api-version replicaset-api-version
-                      :run-as-user run-as-user
-                      :service-id service-id
-                      :ssl? (= "https" backend-proto)}
-                     (for [i (range ports)]
-                       [(keyword (str "port" i)) (+ port0 i)]))
+        base-params (into {:k8s-name (service-id->k8s-app-name scheduler service-id)
+                           :backend-protocol backend-proto
+                           :backend-protocol-caps (string/upper-case backend-proto)
+                           :cmd cmd
+                           :cpus cpus
+                           :env template-env
+                           :grace-period-secs grace-period-secs
+                           :health-check-interval-secs health-check-interval-secs
+                           :health-check-max-consecutive-failures health-check-max-consecutive-failures
+                           :health-check-url (sd/service-description->health-check-url service-description)
+                           :home-path home-path
+                           :memory  (str mem "Mi")
+                           :min-instances min-instances
+                           :orchestrator-name orchestrator-name
+                           :port-count ports
+                           :replicaset-api-version replicaset-api-version
+                           :run-as-user run-as-user
+                           :service-id service-id
+                           :ssl? (= "https" backend-proto)}
+                          (for [i (range ports)]
+                            [(keyword (str "port" i)) (+ port0 i)]))
+        extra-params (merge edn-params-fn base-params)
+        params (merge base-params extra-params)
         edn-opts {:readers (merge
                              {'waiter/param params
                               'waiter/param-str (comp str params)}
@@ -459,6 +467,7 @@
 
 ; The Waiter Scheduler protocol implementation for Kubernetes
 (defrecord KubernetesScheduler [api-server-url http-client
+                                edn-params-fn
                                 edn-readers
                                 max-patch-retries
                                 max-name-length
@@ -600,8 +609,8 @@
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
-  [{:keys [authentication edn-readers http-options max-patch-retries max-name-length
-           orchestrator-name pod-base-port replicaset-api-version
+  [{:keys [authentication edn-params edn-readers http-options max-patch-retries
+           max-name-length orchestrator-name pod-base-port replicaset-api-version
            replicaset-spec-file-path service-id->service-description-fn
            service-id->password-fn url]}]
   {:pre [(utils/pos-int? (:socket-timeout http-options))
@@ -615,10 +624,15 @@
          (some-> replicaset-spec-file-path io/as-file .exists)
          (some? (io/as-url url))]}
   (let [http-client (http-utils/http-client-factory http-options)
-        service-id->failed-instances-transient-store (atom {})]
+        service-id->failed-instances-transient-store (atom {})
+        edn-params-fn (let [{fn-sym :fn opts :options} edn-params
+                            f @(utils/resolve-symbol fn-sym)]
+                        (assert fn? f)
+                        #(f % opts))]
     (when authentication
       (start-auth-renewer authentication))
     (->KubernetesScheduler url http-client
+                           edn-params-fn
                            (pc/map-vals (comp deref utils/resolve-symbol)
                                         edn-readers)
                            max-patch-retries

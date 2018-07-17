@@ -288,6 +288,18 @@
                                                   ;; The sample function given below simply returns the string from the WAITER_K8S_AUTH_STRING environment variable.
                                                   :refresh-fn waiter.scheduler.kubernetes/authorization-from-environment}
 
+                                 :edn-params {;; Optional function for making more values available to the #waiter/param EDN reader (see :replicaset-spec-file-path below).
+                                              ;; The :fn should be a function name (symbol) identifying a binary function: (params, options) -> extra-params
+                                              ;; The default waiter-params values are passed as the first argument, and the optional :options map is the second.
+                                              ;; A new map should be returned containing the additional parameters. The new map needn't include the original values,
+                                              ;; since it will be merged into the default-parameters map by waiter.
+                                              ;; Since this function is invoked each time a new ReplicaSet is created, the result values can be customized to each service.
+                                              ;; The implementation below simply returns the :options value as its result,
+                                              ;; which in this case defines a single new parameter called :temp-dir.
+                                              ;; The value `#waiter/params :temp-dir` would thus resolve to `"/scratch"` in the ReplicaSet specification.
+                                              :fn waiter.scheduler.kubernetes/options-as-params
+                                              :options {:temp-dir "/scratch"}}
+
                                  :edn-readers {;; Optional map of symbol -> symbol, where the keys are reader macro names for use in parsing specs in EDN format
                                                ;; (see :replicaset-spec-file-path below), and the values are the symbols for corresponding function implementations.
                                                waiter/stringify clojure.core/str}
