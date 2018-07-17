@@ -39,7 +39,8 @@
   ([service-ids] (make-dummy-scheduler service-ids {}))
   ([service-ids args]
    (->
-     {:max-patch-retries 5
+     {:edn-params-fn (constantly nil)
+      :max-patch-retries 5
       :max-name-length 63
       :orchestrator-name "waiter"
       :pod-base-port 8080
@@ -833,6 +834,7 @@
 
 (deftest test-kubernetes-scheduler
   (let [base-config {:authentication nil
+                     :edn-params {:fn 'clojure.core/merge}
                      :http-options {:conn-timeout 10000
                                     :socket-timeout 10000}
                      :max-patch-retries 5

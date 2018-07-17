@@ -142,8 +142,8 @@
                                                      :started-at newest-failure-start-time)
                                         ;; To match the behavior of the marathon scheduler,
                                         ;; we don't include the exit code in failed instances that were killed by k8s.
-                                        (killed-by-k8s? newest-failure)
-                                        (assoc :exit-code :exitCode newest-failure))]
+                                        (not (killed-by-k8s? newest-failure))
+                                        (assoc :exit-code (:exitCode newest-failure)))]
           (swap! service-id->failed-instances-transient-store
                  update-in [service-id] assoc newest-failure-id newest-failure-instance))))))
 
@@ -406,7 +406,7 @@
                            :ssl? (= "https" backend-proto)}
                           (for [i (range ports)]
                             [(keyword (str "port" i)) (+ port0 i)]))
-        extra-params (merge edn-params-fn base-params)
+        extra-params (edn-params-fn base-params)
         params (merge base-params extra-params)
         edn-opts {:readers (merge
                              {'waiter/param params
