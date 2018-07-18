@@ -594,11 +594,12 @@
   [{:keys [refresh-delay-mins refresh-fn]}]
   {:pre [(or (nil? refresh-delay-mins)
              (utils/pos-int? refresh-delay-mins))
-         (fn? refresh-fn)]}
+         (symbol? refresh-fn)]}
   (let [refresh (-> refresh-fn utils/resolve-symbol deref)
         auth-update-fn (fn auth-update []
                          (if-let [auth-str' (refresh)]
                            (reset! k8s-api-auth-str auth-str')))]
+    (assert (fn? refresh-fn))
     (auth-update-fn)
     (when [refresh-delay-mins]
       (du/start-timer-task
@@ -627,7 +628,7 @@
         service-id->failed-instances-transient-store (atom {})
         edn-params-fn (let [{fn-sym :fn opts :options} edn-params
                             f @(utils/resolve-symbol fn-sym)]
-                        (assert fn? f)
+                        (assert (fn? f))
                         #(f % opts))]
     (when authentication
       (start-auth-renewer authentication))
