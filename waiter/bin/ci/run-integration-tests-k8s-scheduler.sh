@@ -28,7 +28,6 @@ ${KITCHEN_DIR}/bin/build-docker-image.sh
 WAITER_PORT=9091
 ${WAITER_DIR}/bin/run-using-k8s.sh ${WAITER_PORT} &
 
-
 # Run the integration tests
 WAITER_TEST_KITCHEN_CMD=/opt/kitchen/kitchen \
     WAITER_AUTH_RUN_AS_USER=${USER} \
