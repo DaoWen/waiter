@@ -599,7 +599,7 @@
         auth-update-fn (fn auth-update []
                          (if-let [auth-str' (refresh)]
                            (reset! k8s-api-auth-str auth-str')))]
-    (assert (fn? refresh-fn))
+    (assert (fn? refresh))
     (auth-update-fn)
     (when [refresh-delay-mins]
       (du/start-timer-task
