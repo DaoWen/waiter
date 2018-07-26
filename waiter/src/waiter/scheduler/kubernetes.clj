@@ -601,7 +601,7 @@
                            (reset! k8s-api-auth-str auth-str')))]
     (assert (fn? refresh))
     (auth-update-fn)
-    (when [refresh-delay-mins]
+    (when refresh-delay-mins
       (du/start-timer-task
         (t/minutes refresh-delay-mins)
         auth-update-fn
