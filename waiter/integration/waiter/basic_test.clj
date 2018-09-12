@@ -31,6 +31,10 @@
   (:import (java.io ByteArrayInputStream)
            (java.net URLEncoder)))
 
+(deftest ^:parallel ^:integration-fast test-failing
+  (testing "should fail"
+    (is false)))
+
 (deftest ^:parallel ^:integration-fast test-basic-functionality
   (testing-using-waiter-url
     (let [{:keys [service-id request-headers]}
