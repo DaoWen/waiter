@@ -6,7 +6,7 @@ set -x
 # Python environment setup
 
 pyenv versions
-pyenv global 3.7
+pyenv global 3.6
 
 python --version
 python3 --version
