@@ -692,48 +692,105 @@
         :delay-ms (* 60000 refresh-delay-mins)))))
 
 (defn- global-state-query
-  [{:keys [http-client] :as scheduler} pods-url]
-  (let [response (api-request http-client pods-url)
-        resource-version (get-in response [:metadata :resourceVersion])
-        instances (->> response
-                       :items
-                       (map (partial pod->ServiceInstance scheduler))
-                       (filter some?)
-                       (pc/map-from-vals :id))]
-    {:instances instances
+  [{:keys [http-client] :as scheduler} objects-url]
+  (let [{:keys [items] :as response} (api-request http-client objects-url)
+        resource-version (get-in response [:metadata :resourceVersion])]
+    {:items items
      :version resource-version}))
 
-(defn start-state-watch!
-  "Initialize the global-state atom,
-   and start a thread to continuously update the value based on watched events."
+(defn- global-pods-state-query
+  [scheduler pods-url]
+  (let [{:keys [items version]} (global-state-query scheduler pods-url)
+        grouped-instances (->> items
+                               (map (partial pod->ServiceInstance scheduler))
+                               (filter some?)
+                               (group-by :service-id)
+                               (pc/map-vals (partial pc/map-from-vals :id)))]
+    {:instances grouped-instances
+     :version version}))
+
+(defn start-pods-watch!
+  "Start a thread to continuously update the global-state atom based on watched Pod events."
   [{:keys [api-server-url global-state orchestrator-name] :as scheduler}]
   (let [pods-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
-        {:keys [version] :as initial-state} (global-state-query scheduler pods-url)]
-    (reset! global-state initial-state)
-    (doto
-      (Thread. (fn state-watch []
-                 (loop [v version]
-                   (try
-                     (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
-                           json-stream (streaming-api-request pods-watch-url)]
-                       (doseq [{pod-state :object update-type :type :as obj} json-stream]
-                         (when-let [{:keys [id] :as instance} (pod->ServiceInstance scheduler pod-state)]
-                           ;(scheduler/log "pod state update:" update-type instance)
-                           (case update-type
-                             "ADDED" (swap! global-state assoc-in [:instances id] instance)
-                             "MODIFIED" (swap! global-state assoc-in [:instances id] instance)
-                             "DELETED" (swap! global-state utils/dissoc-in [:instances id])))))
-                     (catch Exception e
-                       (log/error e "error in state-watch thread")))
-                   (when-let [{:keys [version']}
-                              (try
-                                (let [state' (global-state-query scheduler pods-url)]
-                                  (reset! global-state state')
-                                  state')
-                                (catch Exception e
-                                  (log/error e "error recovering state-watch thread")))]
-                     (recur version')))))
-      (.start))))
+        {:keys [version instances] :as initial-state} (global-state-query scheduler pods-url)]
+    (swap! global-state assoc
+           :instances instances
+           :pods-version version)
+    (->
+      (fn pods-watch []
+        (loop [v version]
+          (try
+            (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
+                  json-stream (streaming-api-request pods-watch-url)]
+              (doseq [{pod-state :object update-type :type :as obj} json-stream]
+                (when-let [{:keys [id service-id] :as instance} (pod->ServiceInstance scheduler pod-state)]
+                  ;(scheduler/log "pod state update:" update-type instance)
+                  (case update-type
+                    "ADDED" (swap! global-state assoc-in [:instances service-id id] instance)
+                    "MODIFIED" (swap! global-state assoc-in [:instances service-id id] instance)
+                    "DELETED" (swap! global-state utils/dissoc-in [:instances service-id id])))))
+            (catch Exception e
+              (log/error e "error in pods state watch thread")))
+          (when-let [{version' :pods-version}
+                     (try
+                       (let [{:keys [version instances] :as state'} (global-pods-state-query scheduler pods-url)]
+                         (swap! global-state assoc
+                                :instances instances
+                                :pods-version version)
+                         state')
+                       (catch Exception e
+                         (log/error e "error recovering pods state watch thread")))]
+            (recur version'))))
+      Thread.
+      .start)))
+
+(defn- global-rs-state-query
+  [scheduler rs-url]
+  (let [{:keys [items version]} (global-state-query scheduler rs-url)
+        services (->> items
+                      (map replicaset->Service)
+                      (filter some?)
+                      (pc/map-from-vals :id))]
+    {:services services
+     :version version}))
+
+(defn start-replicasets-watch!
+  "Start a thread to continuously update the global-state atom based on watched ReplicaSet events."
+  [{:keys [api-server-url global-state orchestrator-name replicaset-api-version] :as scheduler}]
+  (let [rs-url (str api-server-url "/apis/" replicaset-api-version
+                    "/replicasets?labelSelector=managed-by="
+                    orchestrator-name)
+        {:keys [version services] :as initial-state} (global-rs-state-query scheduler pods-url)]
+    (swap! global-state assoc
+           :services services
+           :rs-version version)
+    (->
+      (fn rs-watch []
+        (loop [v version]
+          (try
+            (let [rs-watch-url (str rs-url "&watch=true&resourceVersion=" v)
+                  json-stream (streaming-api-request rs-watch-url)]
+              (doseq [{rs-state :object update-type :type :as obj} json-stream]
+                (when-let [{:keys [id] :as service} (replicaset->Service rs-state)]
+                  (case update-type
+                    "ADDED" (swap! global-state assoc-in [:services id] service)
+                    "MODIFIED" (swap! global-state assoc-in [:services id] service)
+                    "DELETED" (swap! global-state utils/dissoc-in [:services id])))))
+            (catch Exception e
+              (log/error e "error in ReplicaSet state watch thread")))
+          (when-let [{version' :pods-version}
+                     (try
+                       (let [{:keys [version services] :as state'} (global-rs-state-query pods-url)]
+                         (swap! global-state assoc
+                                :services services
+                                :rs-version version)
+                         state')
+                       (catch Exception e
+                         (log/error e "error recovering ReplicaSet state watch thread")))]
+            (recur version'))))
+      Thread.
+      .start)))
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
@@ -802,5 +859,6 @@
                                            service-id->failed-instances-transient-store
                                            service-id->password-fn
                                            service-id->service-description-fn)]
-      (start-state-watch! scheduler)
+      (start-pods-watch! scheduler)
+      (start-replicasets-watch! scheduler)
       scheduler)))
