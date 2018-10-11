@@ -437,6 +437,8 @@
   [sym]
   {:pre [(symbol? sym)]}
   (let [target-ns (namespace sym)]
+    (when-not (str/blank? target-ns)
+      (-> target-ns symbol require))
     (resolve sym)))
 
 (defn create-component
