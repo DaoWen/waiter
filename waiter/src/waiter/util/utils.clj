@@ -436,11 +436,8 @@
   "Resolve the given symbol to the corresponding Var."
   [sym]
   {:pre [(symbol? sym)]}
-  (when (namespace sym)
-    (throw (ex-info "Can only load vars that are ns-qualified!" {:symbol sym})))
-  (if-let [resolved (resolve sym)]
-    resolved
-    (throw (ex-info "Unable to resolve var, is it valid?" {:symbol sym}))))
+  (let [target-ns (namespace sym)]
+    (resolve sym)))
 
 (defn create-component
   "Creates a component based on the specified :kind"
