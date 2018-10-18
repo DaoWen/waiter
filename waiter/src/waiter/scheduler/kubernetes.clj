@@ -219,15 +219,8 @@
 
 (defn- get-replicaset-pods
   "Get all Kubernetes pods associated with the given Waiter Service's corresponding ReplicaSet."
-  [{:keys [api-server-url http-client service-id->service-description-fn] :as scheduler}
-   {:keys [k8s/app-name k8s/namespace]}]
-  (->> (str api-server-url
-            "/api/v1/namespaces/"
-            namespace
-            "/pods?labelSelector=app="
-            app-name)
-       (api-request http-client)
-       :items))
+  [{:keys [global-state] :as scheduler} {service-id :id}]
+  (-> global-state deref :service-id->pods (get service-id) vals))
 
 (defn- live-pod?
   "Returns true if the pod has started, but has not yet been deleted."
@@ -270,6 +263,7 @@
 (defn- get-replica-count
   "Query the current replica count for the given Kubernetes object."
   [{:keys [http-client] :as scheduler} replicaset-url]
+  ;; FIXME - should be grabbing this info from scheduler global-state
   (-> (api-request http-client replicaset-url)
       (get-in [:spec :replicas])))
 
@@ -407,6 +401,7 @@
            service-id->service-description-fn] :as scheduler}
    service-id]
   (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
+    ;; FIXME - should do this lookup in cached scheduler global-state
     (some->> (str api-server-url "/apis/" replicaset-api-version
                   "/namespaces/" service-ns
                   "/replicasets?labelSelector=managed-by=" orchestrator-name
@@ -700,7 +695,7 @@
                                (filter some?)
                                (group-by :service-id)
                                (pc/map-vals (partial pc/map-from-vals :id)))]
-    {:instances grouped-instances
+    {:service-id->pods grouped-instances
      :version version}))
 
 (defn start-pods-watch!
@@ -709,7 +704,7 @@
   (let [pods-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
         {:keys [version instances] :as initial-state} (global-state-query scheduler pods-url)]
     (swap! global-state assoc
-           :instances instances
+           :service-id->pods instances
            :pods-version version)
     (->
       (fn pods-watch []
@@ -718,19 +713,20 @@
             (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
                   json-stream (streaming-api-request pods-watch-url)]
               (doseq [{pod-state :object update-type :type :as obj} json-stream]
-                (when-let [{:keys [id service-id] :as instance} (pod->ServiceInstance scheduler pod-state)]
-                  (scheduler/log "pod state update:" update-type instance)
+                (let [id (get-in pod-state [:metadata :name])
+                      service-id (get-in pod-state [:metadata :annotations :waiter/service-id])]
+                  (scheduler/log "pod state update:" update-type pod-state)
                   (case update-type
-                    "ADDED" (swap! global-state assoc-in [:instances service-id id] instance)
-                    "MODIFIED" (swap! global-state assoc-in [:instances service-id id] instance)
-                    "DELETED" (swap! global-state utils/dissoc-in [:instances service-id id])))))
+                    "ADDED" (swap! global-state assoc-in [:service-id->pods service-id id] pod-state)
+                    "MODIFIED" (swap! global-state assoc-in [:service-id->pods service-id id] pod-state)
+                    "DELETED" (swap! global-state utils/dissoc-in [:service-id->pods service-id id])))))
             (catch Exception e
               (log/error e "error in pods state watch thread")))
           (when-let [{version' :pods-version}
                      (try
-                       (let [{:keys [version instances] :as state'} (global-pods-state-query scheduler pods-url)]
+                       (let [{:keys [version service-id->pods] :as state'} (global-pods-state-query scheduler pods-url)]
                          (swap! global-state assoc
-                                :instances instances
+                                :service-id->pods service-id->pods
                                 :pods-version version)
                          state')
                        (catch Exception e
@@ -827,12 +823,13 @@
                                      (assert (fn? f) "ReplicaSet spec function must be a Clojure fn")
                                      (fn [scheduler service-id service-description]
                                        (f scheduler service-id service-description replicaset-spec-builder)))
+        global-scheduler-state (atom nil)
         scheduler-config {:api-server-url url
+                          :global-state global-scheduler-state
                           :http-client http-client
                           :orchestrator-name orchestrator-name
                           :replicaset-api-version replicaset-api-version
                           :service-id->failed-instances-transient-store service-id->failed-instances-transient-store}
-        global-scheduler-state (atom nil)
         get-service->instances-fn #(get-service->instances scheduler-config)
         {:keys [retrieve-syncer-state-fn]} (start-scheduler-syncer-fn
                                              scheduler-name
