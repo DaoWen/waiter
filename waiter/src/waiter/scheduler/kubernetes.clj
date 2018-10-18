@@ -395,25 +395,9 @@
      :result :deleted}))
 
 (defn service-id->service
-  "Look up the Kubernetes ReplicaSet associated with a given Waiter service-id,
-   and return a corresponding Waiter Service record."
-  [{:keys [api-server-url http-client orchestrator-name replicaset-api-version
-           service-id->service-description-fn] :as scheduler}
-   service-id]
-  (when-let [service-ns (-> service-id service-id->service-description-fn service-description->namespace)]
-    ;; FIXME - should do this lookup in cached scheduler global-state
-    (some->> (str api-server-url "/apis/" replicaset-api-version
-                  "/namespaces/" service-ns
-                  "/replicasets?labelSelector=managed-by=" orchestrator-name
-                  ",app=" (service-id->k8s-app-name scheduler service-id))
-             (api-request http-client)
-             :items
-             ;; It's possible that multiple Waiter services in different namespaces
-             ;; have service-ids mapping to the same Kubernetes object name,
-             ;; so we filter to match the full service-id as well.
-             (filter #(= service-id (get-in % [:metadata :annotations :waiter/service-id])))
-             first
-             replicaset->Service)))
+  "Look up a Waiter Service record via its service-id."
+  [{:keys [global-state] :as scheduler} service-id]
+  (-> global-state deref :services (get service-id)))
 
 (defn get-service->instances
   "Returns a map of scheduler/Service records -> map of scheduler/ServiceInstance records."
