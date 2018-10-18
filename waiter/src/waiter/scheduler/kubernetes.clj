@@ -262,10 +262,10 @@
 
 (defn- get-replica-count
   "Query the current replica count for the given Kubernetes object."
-  [{:keys [http-client] :as scheduler} replicaset-url]
-  ;; FIXME - should be grabbing this info from scheduler global-state
-  (-> (api-request http-client replicaset-url)
-      (get-in [:spec :replicas])))
+  [{:keys [global-state] :as scheduler} service-id]
+  (let [service (-> global-state deref :services (get service-id))
+        {:keys [running staged]} (:task-stats service)]
+    (+ running staged)))
 
 (defmacro k8s-patch-with-retries
   "Query the current replica count for the given Kubernetes object,
@@ -292,17 +292,17 @@
 (defn- scale-service-up-to
   "Scale the number of instances for a given service to a specific number.
    Only used for upward scaling. No-op if it would result in downward scaling."
-  [{:keys [http-client max-patch-retries] :as scheduler} service instances']
+  [{:keys [http-client max-patch-retries] :as scheduler} {service-id :id :as service} instances']
   (let [replicaset-url (build-replicaset-url scheduler service)]
     (loop [attempt 1
            instances (:instances service)]
       (if (<= instances' instances)
-        (log/warn "skipping non-upward scale-up request on" (:id service)
+        (log/warn "skipping non-upward scale-up request on" service-id
                   "from" instances "to" instances')
         (k8s-patch-with-retries
           (patch-object-replicas http-client replicaset-url instances instances')
           (<= attempt max-patch-retries)
-          (recur (inc attempt) (get-replica-count scheduler replicaset-url)))))))
+          (recur (inc attempt) (get-replica-count scheduler service-id)))))))
 
 (defn- scale-service-by-delta
   "Scale the number of instances for a given service by a given delta.
