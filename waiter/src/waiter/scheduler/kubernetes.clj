@@ -672,6 +672,39 @@
         auth-update-task
         :delay-ms (* 60000 refresh-delay-mins)))))
 
+
+(defn- reset-watch-state!
+  [{:keys [watch-state] :as scheduler}
+   {:keys [resource-key resource-url query-fn version-key]}]
+  (let [{:keys [version] :as initial-state} (query-fn scheduler resource-url)]
+    (swap! watch-state assoc
+           resource-key (get initial-state resource-key)
+           version-key version)
+    version))
+
+(defn- start-k8s-watch!
+  "Start a thread to continuously update the watch-state atom based on watched K8s events."
+  [{:keys [api-server-url watch-state] :as scheduler}
+   {:keys [resource-key resource-url update-fn] :as options}]
+  (reset-watch-state! scheduler options)
+  (->
+    (fn k8s-watch []
+      (loop [v version]
+        (try
+          (let [watch-url (str resource-url "&watch=true&resourceVersion=" v)
+                json-stream (streaming-api-request watch-url)]
+            (doseq [obj json-stream]
+              (update-fn obj)))
+          (catch Exception e
+            (log/error e "error in" resource-key "state watch thread")))
+        (try
+          (when-let [version' (reset-watch-state! scheduler options)]
+            (recur version'))
+          (catch Exception e
+            (log/error e "error recovering" resource-key "state watch thread")))))
+    Thread.
+    .start))
+
 (defn- global-state-query
   [{:keys [http-client] :as scheduler} objects-url]
   (let [{:keys [items] :as response} (api-request http-client objects-url)
@@ -692,39 +725,20 @@
 (defn start-pods-watch!
   "Start a thread to continuously update the watch-state atom based on watched Pod events."
   [{:keys [api-server-url watch-state orchestrator-name] :as scheduler}]
-  (let [pods-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
-        {:keys [version service-id->pods] :as initial-state} (global-pods-state-query scheduler pods-url)]
-    (swap! watch-state assoc
-           :service-id->pods service-id->pods
-           :pods-version version)
-    (->
-      (fn pods-watch []
-        (loop [v version]
-          (try
-            (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
-                  json-stream (streaming-api-request pods-watch-url)]
-              (doseq [{pod :object update-type :type :as obj} json-stream]
-                (let [id (k8s-object->id pod)
-                      service-id (k8s-object->service-id pod)]
-                  (scheduler/log "pod state update:" update-type pod)
-                  (case update-type
-                    "ADDED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
-                    "MODIFIED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
-                    "DELETED" (swap! watch-state utils/dissoc-in [:service-id->pods service-id id])))))
-            (catch Exception e
-              (log/error e "error in pods state watch thread")))
-          (when-let [{version' :pods-version}
-                     (try
-                       (let [{:keys [version service-id->pods] :as state'} (global-pods-state-query scheduler pods-url)]
-                         (swap! watch-state assoc
-                                :service-id->pods service-id->pods
-                                :pods-version version)
-                         state')
-                       (catch Exception e
-                         (log/error e "error recovering pods state watch thread")))]
-            (recur version'))))
-      Thread.
-      .start)))
+  (start-k8s-watch!
+    scheduler
+    {:resource-key :service-id->pods
+     :resource-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
+     :query-fn global-pods-state-query
+     :version-key :pods-version
+     :update-fn (fn pods-watch-update [{pod :object update-type :type}]
+                  (let [id (k8s-object->id pod)
+                        service-id (k8s-object->service-id pod)]
+                    (scheduler/log "pod state update:" update-type pod)
+                    (case update-type
+                      "ADDED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
+                      "MODIFIED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
+                      "DELETED" (swap! watch-state utils/dissoc-in [:service-id->pods service-id id]))))}))
 
 (defn global-rs-state-query
   "Query K8s for all Waiter-managed ReplicaSets"
@@ -740,40 +754,21 @@
 (defn start-replicasets-watch!
   "Start a thread to continuously update the watch-state atom based on watched ReplicaSet events."
   [{:keys [api-server-url watch-state orchestrator-name replicaset-api-version] :as scheduler}]
-  (let [rs-url (str api-server-url "/apis/" replicaset-api-version
-                    "/replicasets?labelSelector=managed-by="
-                    orchestrator-name)
-        {:keys [version services] :as initial-state} (global-rs-state-query scheduler rs-url)]
-    (swap! watch-state assoc
-           :services services
-           :rs-version version)
-    (->
-      (fn rs-watch []
-        (loop [v version]
-          (try
-            (let [rs-watch-url (str rs-url "&watch=true&resourceVersion=" v)
-                  json-stream (streaming-api-request rs-watch-url)]
-              (doseq [{rs-state :object update-type :type :as obj} json-stream]
-                (when-let [{:keys [id] :as service} (replicaset->Service rs-state)]
-                  (scheduler/log "rs state update:" update-type service)
-                  (case update-type
-                    "ADDED" (swap! watch-state assoc-in [:services id] service)
-                    "MODIFIED" (swap! watch-state assoc-in [:services id] service)
-                    "DELETED" (swap! watch-state utils/dissoc-in [:services id])))))
-            (catch Exception e
-              (log/error e "error in ReplicaSet state watch thread")))
-          (when-let [{version' :pods-version}
-                     (try
-                       (let [{:keys [version services] :as state'} (global-rs-state-query rs-url)]
-                         (swap! watch-state assoc
-                                :services services
-                                :rs-version version)
-                         state')
-                       (catch Exception e
-                         (log/error e "error recovering ReplicaSet state watch thread")))]
-            (recur version'))))
-      Thread.
-      .start)))
+  (start-k8s-watch!
+    scheduler
+    {:resource-key :services
+     :resource-url (str api-server-url "/apis/" replicaset-api-version
+                        "/replicasets?labelSelector=managed-by="
+                        orchestrator-name)
+     :query-fn global-rs-state-query
+     :version-key :rs-version
+     :update-fn (fn rs-watch-update [{rs :object update-type :type}]
+                  (when-let [{:keys [id] :as service} (replicaset->Service rs)]
+                    (scheduler/log "rs state update:" update-type service)
+                    (case update-type
+                      "ADDED" (swap! watch-state assoc-in [:services id] service)
+                      "MODIFIED" (swap! watch-state assoc-in [:services id] service)
+                      "DELETED" (swap! watch-state utils/dissoc-in [:services id]))))}))
 
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
