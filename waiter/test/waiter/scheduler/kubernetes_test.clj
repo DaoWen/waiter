@@ -25,15 +25,6 @@
   (:import (waiter.scheduler Service ServiceInstance)
            (waiter.scheduler.kubernetes KubernetesScheduler)))
 
-(comment
-  "BROKEN TESTS:"
-  test-scale-service
-  "Fixed:"
-  test-scheduler-get-services
-  test-scheduler-service-exists?
-  test-kubernetes-scheduler
-  test-scheduler-get-service->instances)
-
 (defmacro throw-exception
   "Throw a RuntimeException with the stack trace suppressed.
    Suppressing the stack trace helps keep our test logs cleaner."

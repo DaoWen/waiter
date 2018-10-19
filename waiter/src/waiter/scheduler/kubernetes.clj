@@ -686,24 +686,27 @@
   "Start a thread to continuously update the watch-state atom based on watched K8s events."
   [{:keys [api-server-url watch-state] :as scheduler}
    {:keys [resource-key resource-url update-fn] :as options}]
-  (reset-watch-state! scheduler options)
-  (->
-    (fn k8s-watch []
-      (loop [v version]
-        (try
-          (let [watch-url (str resource-url "&watch=true&resourceVersion=" v)
-                json-stream (streaming-api-request watch-url)]
-            (doseq [obj json-stream]
-              (update-fn obj)))
-          (catch Exception e
-            (log/error e "error in" resource-key "state watch thread")))
-        (try
-          (when-let [version' (reset-watch-state! scheduler options)]
-            (recur version'))
-          (catch Exception e
-            (log/error e "error recovering" resource-key "state watch thread")))))
-    Thread.
-    .start))
+  (let [initial-version (reset-watch-state! scheduler options)]
+    (when-not initial-version
+      (log/error "Unable to get initial watch state for" resource-key)
+      (throw (ex-info "Unable to get initial watch state" options)))
+    (->
+      (fn k8s-watch []
+        (loop [v initial-version]
+          (try
+            (let [watch-url (str resource-url "&watch=true&resourceVersion=" v)]
+              ;; process updates forever (unless there's an exception)
+              (doseq [json-object (streaming-api-request watch-url)]
+                (update-fn json-object)))
+            (catch Exception e
+              (log/error e "error in" resource-key "state watch thread")))
+          (when-let [version' (try
+                                (reset-watch-state! scheduler options)
+                                (catch Exception e
+                                  (log/error e "error recovering" resource-key "state watch thread")))]
+            (recur version'))))
+      Thread.
+      .start)))
 
 (defn- global-state-query
   [{:keys [http-client] :as scheduler} objects-url]
@@ -810,9 +813,9 @@
                                      (assert (fn? f) "ReplicaSet spec function must be a Clojure fn")
                                      (fn [scheduler service-id service-description]
                                        (f scheduler service-id service-description replicaset-spec-builder)))
-        global-scheduler-state (atom nil)
+        global-watch-state (atom nil)
         scheduler-config {:api-server-url url
-                          :watch-state global-scheduler-state
+                          :watch-state global-watch-state
                           :http-client http-client
                           :orchestrator-name orchestrator-name
                           :replicaset-api-version replicaset-api-version
@@ -828,7 +831,7 @@
     (let [scheduler (->KubernetesScheduler url
                                            authorizer
                                            fileserver
-                                           global-scheduler-state
+                                           global-watch-state
                                            http-client
                                            max-patch-retries
                                            max-name-length
