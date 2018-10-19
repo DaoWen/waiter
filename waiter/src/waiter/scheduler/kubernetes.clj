@@ -224,13 +224,13 @@
 
 (defn- get-services
   "Get all Waiter Services (reified as ReplicaSets) running in this Kubernetes cluster."
-  [{:keys [global-state] :as scheduler}]
-  (-> global-state deref :services vals))
+  [{:keys [watch-state] :as scheduler}]
+  (-> watch-state deref :services vals))
 
 (defn- get-replicaset-pods
   "Get all Kubernetes pods associated with the given Waiter Service's corresponding ReplicaSet."
-  [{:keys [global-state] :as scheduler} {service-id :id}]
-  (-> global-state deref :service-id->pods (get service-id) vals))
+  [{:keys [watch-state] :as scheduler} {service-id :id}]
+  (-> watch-state deref :service-id->pods (get service-id) vals))
 
 (defn- live-pod?
   "Returns true if the pod has started, but has not yet been deleted."
@@ -272,8 +272,8 @@
 
 (defn- get-replica-count
   "Query the current requested replica count for the given Kubernetes object."
-  [{:keys [global-state] :as scheduler} service-id]
-  (-> global-state deref :services (get service-id) :instances))
+  [{:keys [watch-state] :as scheduler} service-id]
+  (-> watch-state deref :services (get service-id) :instances))
 
 (defmacro k8s-patch-with-retries
   "Query the current replica count for the given Kubernetes object,
@@ -404,8 +404,8 @@
 
 (defn service-id->service
   "Look up a Waiter Service record via its service-id."
-  [{:keys [global-state] :as scheduler} service-id]
-  (-> global-state deref :services (get service-id)))
+  [{:keys [watch-state] :as scheduler} service-id]
+  (-> watch-state deref :services (get service-id)))
 
 (defn get-service->instances
   "Returns a map of scheduler/Service records -> map of scheduler/ServiceInstance records."
@@ -417,7 +417,7 @@
 (defrecord KubernetesScheduler [api-server-url
                                 authorizer
                                 fileserver
-                                global-state
+                                watch-state
                                 http-client
                                 max-patch-retries
                                 max-name-length
@@ -550,8 +550,8 @@
     {:failed-instances (vals (get @service-id->failed-instances-transient-store service-id))
      :syncer (retrieve-syncer-state-fn service-id)})
 
-  (state [{:keys [global-state]}]
-    {:global-state @global-state
+  (state [{:keys [watch-state]}]
+    {:watch-state @watch-state
      :service-id->failed-instances @service-id->failed-instances-transient-store
      :syncer (retrieve-syncer-state-fn)})
 
@@ -679,23 +679,22 @@
     {:items items
      :version resource-version}))
 
-;; TODO - need unit test for this
-(defn- global-pods-state-query
+(defn global-pods-state-query
+  "Query K8s for all Waiter-managed Pods"
   [scheduler pods-url]
   (let [{:keys [items version]} (global-state-query scheduler pods-url)
         grouped-pods (->> items
-                          (filter some?)
                           (group-by k8s-object->service-id)
                           (pc/map-vals (partial pc/map-from-vals k8s-object->id)))]
     {:service-id->pods grouped-pods
      :version version}))
 
 (defn start-pods-watch!
-  "Start a thread to continuously update the global-state atom based on watched Pod events."
-  [{:keys [api-server-url global-state orchestrator-name] :as scheduler}]
+  "Start a thread to continuously update the watch-state atom based on watched Pod events."
+  [{:keys [api-server-url watch-state orchestrator-name] :as scheduler}]
   (let [pods-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
         {:keys [version service-id->pods] :as initial-state} (global-pods-state-query scheduler pods-url)]
-    (swap! global-state assoc
+    (swap! watch-state assoc
            :service-id->pods service-id->pods
            :pods-version version)
     (->
@@ -704,20 +703,20 @@
           (try
             (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
                   json-stream (streaming-api-request pods-watch-url)]
-              (doseq [{pod-state :object update-type :type :as obj} json-stream]
-                (let [id (k8s-object->id pod-state)
-                      service-id (k8s-object->service-id pod-state)]
-                  (scheduler/log "pod state update:" update-type pod-state)
+              (doseq [{pod :object update-type :type :as obj} json-stream]
+                (let [id (k8s-object->id pod)
+                      service-id (k8s-object->service-id pod)]
+                  (scheduler/log "pod state update:" update-type pod)
                   (case update-type
-                    "ADDED" (swap! global-state assoc-in [:service-id->pods service-id id] pod-state)
-                    "MODIFIED" (swap! global-state assoc-in [:service-id->pods service-id id] pod-state)
-                    "DELETED" (swap! global-state utils/dissoc-in [:service-id->pods service-id id])))))
+                    "ADDED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
+                    "MODIFIED" (swap! watch-state assoc-in [:service-id->pods service-id id] pod)
+                    "DELETED" (swap! watch-state utils/dissoc-in [:service-id->pods service-id id])))))
             (catch Exception e
               (log/error e "error in pods state watch thread")))
           (when-let [{version' :pods-version}
                      (try
                        (let [{:keys [version service-id->pods] :as state'} (global-pods-state-query scheduler pods-url)]
-                         (swap! global-state assoc
+                         (swap! watch-state assoc
                                 :service-id->pods service-id->pods
                                 :pods-version version)
                          state')
@@ -727,8 +726,8 @@
       Thread.
       .start)))
 
-;; TODO - need unit test for this
-(defn- global-rs-state-query
+(defn global-rs-state-query
+  "Query K8s for all Waiter-managed ReplicaSets"
   [scheduler rs-url]
   (let [{:keys [items version]} (global-state-query scheduler rs-url)
         services (->> items
@@ -739,13 +738,13 @@
      :version version}))
 
 (defn start-replicasets-watch!
-  "Start a thread to continuously update the global-state atom based on watched ReplicaSet events."
-  [{:keys [api-server-url global-state orchestrator-name replicaset-api-version] :as scheduler}]
+  "Start a thread to continuously update the watch-state atom based on watched ReplicaSet events."
+  [{:keys [api-server-url watch-state orchestrator-name replicaset-api-version] :as scheduler}]
   (let [rs-url (str api-server-url "/apis/" replicaset-api-version
                     "/replicasets?labelSelector=managed-by="
                     orchestrator-name)
         {:keys [version services] :as initial-state} (global-rs-state-query scheduler rs-url)]
-    (swap! global-state assoc
+    (swap! watch-state assoc
            :services services
            :rs-version version)
     (->
@@ -758,15 +757,15 @@
                 (when-let [{:keys [id] :as service} (replicaset->Service rs-state)]
                   (scheduler/log "rs state update:" update-type service)
                   (case update-type
-                    "ADDED" (swap! global-state assoc-in [:services id] service)
-                    "MODIFIED" (swap! global-state assoc-in [:services id] service)
-                    "DELETED" (swap! global-state utils/dissoc-in [:services id])))))
+                    "ADDED" (swap! watch-state assoc-in [:services id] service)
+                    "MODIFIED" (swap! watch-state assoc-in [:services id] service)
+                    "DELETED" (swap! watch-state utils/dissoc-in [:services id])))))
             (catch Exception e
               (log/error e "error in ReplicaSet state watch thread")))
           (when-let [{version' :pods-version}
                      (try
                        (let [{:keys [version services] :as state'} (global-rs-state-query rs-url)]
-                         (swap! global-state assoc
+                         (swap! watch-state assoc
                                 :services services
                                 :rs-version version)
                          state')
@@ -818,7 +817,7 @@
                                        (f scheduler service-id service-description replicaset-spec-builder)))
         global-scheduler-state (atom nil)
         scheduler-config {:api-server-url url
-                          :global-state global-scheduler-state
+                          :watch-state global-scheduler-state
                           :http-client http-client
                           :orchestrator-name orchestrator-name
                           :replicaset-api-version replicaset-api-version

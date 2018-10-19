@@ -50,7 +50,7 @@
    (->
      {:authorizer {:kind :default
                    :default {:factory-fn 'waiter.authorization/noop-authorizer}}
-      :global-state (atom nil)
+      :watch-state (atom nil)
       :fileserver {:port 9090
                    :scheme "http"}
       :max-patch-retries 5
@@ -146,16 +146,17 @@
                       "-" short-sample-uuid)
                  (service-id->k8s-app-name short-name-scheduler service-id))))))))
 
-(defn- reset-scheduler-services-state!
-  ([scheduler api-server-response]
-   (reset-scheduler-services-state! scheduler {} api-server-response))
-  ([{:keys [global-state]} base-state api-server-response]
-   (let [services (->> api-server-response
-                       :items
-                       (map replicaset->Service)
-                       (filter some?)
-                       (pc/map-from-vals :id))]
-     (reset! global-state (assoc base-state :services services)))))
+(defn- reset-scheduler-watch-state!
+  ([scheduler rs-response]
+   (reset-scheduler-watch-state! scheduler rs-response nil))
+  ([{:keys [watch-state] :as scheduler} rs-response pods-response]
+   (let [dummy-resource-uri "http://ignored-uri"
+         rs-state (with-redefs [api-request (constantly rs-response)]
+                    (global-rs-state-query scheduler dummy-resource-uri))
+         pods-state (with-redefs [api-request (constantly pods-response)]
+                      (global-pods-state-query scheduler dummy-resource-uri))
+         global-state (merge rs-state pods-state)]
+     (reset! watch-state global-state))))
 
 (deftest test-scheduler-get-services
   (let [test-cases
@@ -273,14 +274,14 @@
                                     :task-stats {:running 0, :healthy 0, :unhealthy 0, :staged 0}})]}]]
     (doseq [{:keys [api-server-response expected-result]} test-cases]
       (let [dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
-            _ (reset-scheduler-services-state! dummy-scheduler api-server-response)
+            _ (reset-scheduler-watch-state! dummy-scheduler api-server-response)
             actual-result (->> dummy-scheduler
                                scheduler/get-services
                                sanitize-k8s-service-records)]
         (assert-data-equal expected-result actual-result)))))
 
 (deftest test-scheduler-get-service->instances
-  (let [services-response
+  (let [rs-response
         {:kind "ReplicaSetList"
          :apiVersion "extensions/v1beta1"
          :items [{:metadata {:name "test-app-1234"
@@ -307,11 +308,10 @@
                            :availableReplicas 2
                            :unavailableReplicas 1}}]}
 
-        service-pods-state
-        {:service-id->pods
-         {"test-app-1234"
-          {"test-app-1234-abcd1"
-           {:metadata {:name "test-app-1234-abcd1"
+        pods-response
+        {:kind "PodList"
+         :apiVersion "v1"
+         :items [{:metadata {:name "test-app-1234-abcd1"
                        :namespace "myself"
                        :labels {:app "test-app-1234"
                                 :managed-by "waiter"}
@@ -324,7 +324,6 @@
                      :containerStatuses [{:name "test-app-1234"
                                           :ready true
                                           :restartCount 0}]}}
-           "test-app-1234-abcd2"
            {:metadata {:name "test-app-1234-abcd2"
                        :namespace "myself"
                        :labels {:app "test-app-1234"
@@ -337,10 +336,7 @@
                      :startTime "2014-09-13T00:24:47Z"
                      :containerStatuses [{:name "test-app-1234"
                                           :ready true
-                                          :restartCount 0}]}}}
-
-          "test-app-6789"
-          {"test-app-6789-abcd1"
+                                          :restartCount 0}]}}
            {:metadata {:name "test-app-6789-abcd1"
                        :namespace "myself"
                        :labels {:app "test-app-6789"
@@ -354,7 +350,6 @@
                      :containerStatuses [{:name "test-app-6789"
                                           :ready true
                                           :restartCount 0}]}}
-           "test-app-6789-abcd2"
            {:metadata {:name "test-app-6789-abcd2"
                        :namespace "myself"
                        :labels {:app "test-app-6789"
@@ -370,7 +365,6 @@
                                                                    :reason "Error"
                                                                    :startedAt "2014-09-13T00:24:36Z"}}
                                           :restartCount 1}]}}
-           "test-app-6789-abcd3"
            {:metadata {:name "test-app-6789-abcd3"
                        :namespace "myself"
                        :labels {:app "test-app-6789"
@@ -382,7 +376,7 @@
             :status {:podIP "10.141.141.15"
                      :startTime "2014-09-13T00:24:38Z"
                      :containerStatuses [{:name "test-app-6789"
-                                          :restartCount 0}]}}}}}
+                                          :restartCount 0}]}}]}
 
         expected (hash-map
                    (scheduler/make-Service {:id "test-app-1234"
@@ -452,7 +446,7 @@
                         :service-id "test-app-6789"
                         :started-at (du/str-to-date "2014-09-13T00:24:36Z" k8s-timestamp-format)})]})
         dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
-        _ (reset-scheduler-services-state! dummy-scheduler service-pods-state services-response)
+        _ (reset-scheduler-watch-state! dummy-scheduler rs-response pods-response)
         actual (->> dummy-scheduler
                     get-service->instances
                     sanitize-k8s-service-records)]
@@ -543,7 +537,7 @@
                      :expected-result true}]]
     (doseq [{:keys [api-server-response expected-result]} test-cases]
       (let [dummy-scheduler (make-dummy-scheduler [service-id])
-            _ (reset-scheduler-services-state! dummy-scheduler api-server-response)
+            _ (reset-scheduler-watch-state! dummy-scheduler api-server-response)
             actual-result (scheduler/service-exists? dummy-scheduler service-id)]
         (is (= expected-result actual-result))))))
 
@@ -622,7 +616,7 @@
         service (scheduler/make-Service {:id service-id :instances 1 :k8s/app-name service-id :k8s/namespace "myself"})
         service-state (atom {:services {service-id service}})
         dummy-scheduler (-> (make-dummy-scheduler [service-id])
-                            (assoc :global-state service-state))]
+                            (assoc :watch-state service-state))]
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-scale"
         (let [actual (with-redefs [api-request (constantly {:status "OK"})]
@@ -715,7 +709,7 @@
                                  :default {:factory-fn 'waiter.authorization/noop-authorizer}}
                     :fileserver {:port 9090
                                  :scheme "http"}
-                    :global-state (atom nil)
+                    :watch-state (atom nil)
                     :http-options {:conn-timeout 10000
                                    :socket-timeout 10000}
                     :max-patch-retries 5
