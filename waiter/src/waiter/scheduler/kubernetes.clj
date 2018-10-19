@@ -682,7 +682,7 @@
            version-key version)
     version))
 
-(defn- start-k8s-watch!
+(defn start-k8s-watch!
   "Start a thread to continuously update the watch-state atom based on watched K8s events."
   [{:keys [api-server-url watch-state] :as scheduler}
    {:keys [resource-key resource-url update-fn] :as options}]

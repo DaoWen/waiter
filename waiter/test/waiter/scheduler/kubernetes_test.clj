@@ -713,42 +713,43 @@
                                               :default-container-image "twosigma/kitchen:latest"}
                     :url "http://127.0.0.1:8001"}
         base-config (merge context k8s-config)]
-    (testing "Creating a KubernetesScheduler"
+    (with-redefs [start-k8s-watch! (constantly nil)]
+      (testing "Creating a KubernetesScheduler"
 
-      (testing "should throw on invalid configuration"
-        (testing "bad url"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url nil))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url ""))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url "localhost")))))
-        (testing "bad http options"
-          (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :conn-timeout] 0))))
-          (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :socket-timeout] 0)))))
-        (testing "bad max conflict retries"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-patch-retries -1)))))
-        (testing "bad max name length"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-name-length 0)))))
-        (testing "bad ReplicaSet spec factory function"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] nil))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] "not a symbol"))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] :not-a-symbol))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] 'not.a.namespace/not-a-fn)))))
-        (testing "bad base port number"
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port -1))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port "8080"))))
-          (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port 1234567890))))))
+        (testing "should throw on invalid configuration"
+          (testing "bad url"
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url nil))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url ""))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :url "localhost")))))
+          (testing "bad http options"
+            (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :conn-timeout] 0))))
+            (is (thrown? Throwable (kubernetes-scheduler (update-in base-config [:http-options :socket-timeout] 0)))))
+          (testing "bad max conflict retries"
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-patch-retries -1)))))
+          (testing "bad max name length"
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :max-name-length 0)))))
+          (testing "bad ReplicaSet spec factory function"
+            (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] nil))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] "not a symbol"))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] :not-a-symbol))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc-in base-config [:replicaset-spec-builder :factory-fn] 'not.a.namespace/not-a-fn)))))
+          (testing "bad base port number"
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port -1))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port "8080"))))
+            (is (thrown? Throwable (kubernetes-scheduler (assoc base-config :pod-base-port 1234567890))))))
 
-      (testing "should work with valid configuration"
-        (is (instance? KubernetesScheduler (kubernetes-scheduler base-config))))
+        (testing "should work with valid configuration"
+          (is (instance? KubernetesScheduler (kubernetes-scheduler base-config))))
 
-      (testing "periodic auth-refresh task"
-        (let [kill-task-fn (atom (constantly nil))
-              orig-start-auth-renewer start-auth-renewer
-              secret-value "secret-value"]
-          (try
-            (with-redefs [start-auth-renewer #(reset! kill-task-fn (apply orig-start-auth-renewer %&))]
-              (is (instance? KubernetesScheduler (kubernetes-scheduler (assoc base-config :authentication {:action-fn `test-auth-refresher
-                                                                                                           :refresh-delay-mins 1
-                                                                                                           :refresh-value secret-value})))))
-            (is (ct/wait-for #(= secret-value @k8s-api-auth-str) :interval 1 :timeout 10))
-            (finally
-              (@kill-task-fn))))))))
+        (testing "periodic auth-refresh task"
+          (let [kill-task-fn (atom (constantly nil))
+                orig-start-auth-renewer start-auth-renewer
+                secret-value "secret-value"]
+            (try
+              (with-redefs [start-auth-renewer #(reset! kill-task-fn (apply orig-start-auth-renewer %&))]
+                (is (instance? KubernetesScheduler (kubernetes-scheduler (assoc base-config :authentication {:action-fn `test-auth-refresher
+                                                                                                             :refresh-delay-mins 1
+                                                                                                             :refresh-value secret-value})))))
+              (is (ct/wait-for #(= secret-value @k8s-api-auth-str) :interval 1 :timeout 10))
+              (finally
+                (@kill-task-fn)))))))))
