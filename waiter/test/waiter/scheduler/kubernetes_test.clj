@@ -25,6 +25,15 @@
   (:import (waiter.scheduler Service ServiceInstance)
            (waiter.scheduler.kubernetes KubernetesScheduler)))
 
+(comment
+  "BROKEN TESTS:"
+  test-scale-service
+  "Fixed:"
+  test-scheduler-get-services
+  test-scheduler-service-exists?
+  test-kubernetes-scheduler
+  test-scheduler-get-service->instances)
+
 (defmacro throw-exception
   "Throw a RuntimeException with the stack trace suppressed.
    Suppressing the stack trace helps keep our test logs cleaner."
@@ -41,6 +50,7 @@
    (->
      {:authorizer {:kind :default
                    :default {:factory-fn 'waiter.authorization/noop-authorizer}}
+      :global-state (atom nil)
       :fileserver {:port 9090
                    :scheme "http"}
       :max-patch-retries 5
@@ -136,13 +146,24 @@
                       "-" short-sample-uuid)
                  (service-id->k8s-app-name short-name-scheduler service-id))))))))
 
+(defn- reset-scheduler-services-state!
+  ([scheduler api-server-response]
+   (reset-scheduler-services-state! scheduler {} api-server-response))
+  ([{:keys [global-state]} base-state api-server-response]
+   (let [services (->> api-server-response
+                       :items
+                       (map replicaset->Service)
+                       (filter some?)
+                       (pc/map-from-vals :id))]
+     (reset! global-state (assoc base-state :services services)))))
+
 (deftest test-scheduler-get-services
   (let [test-cases
         [{:api-server-response
           {:kind "ReplicaSetList"
            :apiVersion "extensions/v1beta1"
            :items []}
-          :expected-result []}
+          :expected-result nil}
 
          {:api-server-response
           {:kind "ReplicaSetList"
@@ -252,10 +273,10 @@
                                     :task-stats {:running 0, :healthy 0, :unhealthy 0, :staged 0}})]}]]
     (doseq [{:keys [api-server-response expected-result]} test-cases]
       (let [dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
-            actual-result (with-redefs [api-request (constantly api-server-response)]
-                            (->> dummy-scheduler
-                                 scheduler/get-services
-                                 sanitize-k8s-service-records))]
+            _ (reset-scheduler-services-state! dummy-scheduler api-server-response)
+            actual-result (->> dummy-scheduler
+                               scheduler/get-services
+                               sanitize-k8s-service-records)]
         (assert-data-equal expected-result actual-result)))))
 
 (deftest test-scheduler-get-service->instances
@@ -286,81 +307,82 @@
                            :availableReplicas 2
                            :unavailableReplicas 1}}]}
 
-        app-1234-pods-response
-        {:kind "PodList"
-         :apiVersion "v1"
-         :items [{:metadata {:name "test-app-1234-abcd1"
-                             :namespace "myself"
-                             :labels {:app "test-app-1234"
-                                      :managed-by "waiter"}
-                             :annotations {:waiter/port-count "1"
-                                           :waiter/protocol "https"
-                                           :waiter/service-id "test-app-1234"}}
-                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
-                  :status {:podIP "10.141.141.11"
-                           :startTime "2014-09-13T00:24:46Z"
-                           :containerStatuses [{:name "test-app-1234"
-                                                :ready true
-                                                :restartCount 0}]}}
-                 {:metadata {:name "test-app-1234-abcd2"
-                             :namespace "myself"
-                             :labels {:app "test-app-1234"
-                                      :managed-by "waiter"}
-                             :annotations {:waiter/port-count "1"
-                                           :waiter/protocol "https"
-                                           :waiter/service-id "test-app-1234"}}
-                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
-                  :status {:podIP "10.141.141.12"
-                           :startTime "2014-09-13T00:24:47Z"
-                           :containerStatuses [{:name "test-app-1234"
-                                                :ready true
-                                                :restartCount 0}]}}]}
+        service-pods-state
+        {:service-id->pods
+         {"test-app-1234"
+          {"test-app-1234-abcd1"
+           {:metadata {:name "test-app-1234-abcd1"
+                       :namespace "myself"
+                       :labels {:app "test-app-1234"
+                                :managed-by "waiter"}
+                       :annotations {:waiter/port-count "1"
+                                     :waiter/protocol "https"
+                                     :waiter/service-id "test-app-1234"}}
+            :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+            :status {:podIP "10.141.141.11"
+                     :startTime "2014-09-13T00:24:46Z"
+                     :containerStatuses [{:name "test-app-1234"
+                                          :ready true
+                                          :restartCount 0}]}}
+           "test-app-1234-abcd2"
+           {:metadata {:name "test-app-1234-abcd2"
+                       :namespace "myself"
+                       :labels {:app "test-app-1234"
+                                :managed-by "waiter"}
+                       :annotations {:waiter/port-count "1"
+                                     :waiter/protocol "https"
+                                     :waiter/service-id "test-app-1234"}}
+            :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+            :status {:podIP "10.141.141.12"
+                     :startTime "2014-09-13T00:24:47Z"
+                     :containerStatuses [{:name "test-app-1234"
+                                          :ready true
+                                          :restartCount 0}]}}}
 
-        app-6789-pods-response
-        {:kind "PodList"
-         :apiVersion "v1"
-         :items [{:metadata {:name "test-app-6789-abcd1"
-                             :namespace "myself"
-                             :labels {:app "test-app-6789"
-                                      :managed-by "waiter"}
-                             :annotations {:waiter/port-count "1"
-                                           :waiter/protocol "http"
-                                           :waiter/service-id "test-app-6789"}}
-                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
-                  :status {:podIP "10.141.141.13"
-                           :startTime "2014-09-13T00:24:35Z"
-                           :containerStatuses [{:name "test-app-6789"
-                                                :ready true
-                                                :restartCount 0}]}}
-                 {:metadata {:name "test-app-6789-abcd2"
-                             :namespace "myself"
-                             :labels {:app "test-app-6789"
-                                      :managed-by "waiter"}
-                             :annotations {:waiter/port-count "1"
-                                           :waiter/protocol "http"
-                                           :waiter/service-id "test-app-6789"}}
-                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
-                  :status {:podIP "10.141.141.14"
-                           :startTime "2014-09-13T00:24:37Z"
-                           :containerStatuses [{:name "test-app-6789"
-                                                :lastState {:terminated {:exitCode 255
-                                                                         :reason "Error"
-                                                                         :startedAt "2014-09-13T00:24:36Z"}}
-                                                :restartCount 1}]}}
-                 {:metadata {:name "test-app-6789-abcd3"
-                             :namespace "myself"
-                             :labels {:app "test-app-6789"
-                                      :managed-by "waiter"}
-                             :annotations {:waiter/port-count "1"
-                                           :waiter/protocol "http"
-                                           :waiter/service-id "test-app-6789"}}
-                  :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
-                  :status {:podIP "10.141.141.15"
-                           :startTime "2014-09-13T00:24:38Z"
-                           :containerStatuses [{:name "test-app-6789"
-                                                :restartCount 0}]}}]}
-
-        api-server-responses [services-response app-1234-pods-response app-6789-pods-response]
+          "test-app-6789"
+          {"test-app-6789-abcd1"
+           {:metadata {:name "test-app-6789-abcd1"
+                       :namespace "myself"
+                       :labels {:app "test-app-6789"
+                                :managed-by "waiter"}
+                       :annotations {:waiter/port-count "1"
+                                     :waiter/protocol "http"
+                                     :waiter/service-id "test-app-6789"}}
+            :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+            :status {:podIP "10.141.141.13"
+                     :startTime "2014-09-13T00:24:35Z"
+                     :containerStatuses [{:name "test-app-6789"
+                                          :ready true
+                                          :restartCount 0}]}}
+           "test-app-6789-abcd2"
+           {:metadata {:name "test-app-6789-abcd2"
+                       :namespace "myself"
+                       :labels {:app "test-app-6789"
+                                :managed-by "waiter"}
+                       :annotations {:waiter/port-count "1"
+                                     :waiter/protocol "http"
+                                     :waiter/service-id "test-app-6789"}}
+            :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+            :status {:podIP "10.141.141.14"
+                     :startTime "2014-09-13T00:24:37Z"
+                     :containerStatuses [{:name "test-app-6789"
+                                          :lastState {:terminated {:exitCode 255
+                                                                   :reason "Error"
+                                                                   :startedAt "2014-09-13T00:24:36Z"}}
+                                          :restartCount 1}]}}
+           "test-app-6789-abcd3"
+           {:metadata {:name "test-app-6789-abcd3"
+                       :namespace "myself"
+                       :labels {:app "test-app-6789"
+                                :managed-by "waiter"}
+                       :annotations {:waiter/port-count "1"
+                                     :waiter/protocol "http"
+                                     :waiter/service-id "test-app-6789"}}
+            :spec {:containers [{:ports [{:containerPort 8080 :protocol "TCP"}]}]}
+            :status {:podIP "10.141.141.15"
+                     :startTime "2014-09-13T00:24:38Z"
+                     :containerStatuses [{:name "test-app-6789"
+                                          :restartCount 0}]}}}}}
 
         expected (hash-map
                    (scheduler/make-Service {:id "test-app-1234"
@@ -430,11 +452,10 @@
                         :service-id "test-app-6789"
                         :started-at (du/str-to-date "2014-09-13T00:24:36Z" k8s-timestamp-format)})]})
         dummy-scheduler (make-dummy-scheduler ["test-app-1234" "test-app-6789"])
-        response-iterator (.iterator api-server-responses)
-        actual (with-redefs [api-request (fn [& _] (.next response-iterator))]
-                 (->> dummy-scheduler
-                      get-service->instances
-                      sanitize-k8s-service-records))]
+        _ (reset-scheduler-services-state! dummy-scheduler service-pods-state services-response)
+        actual (->> dummy-scheduler
+                    get-service->instances
+                    sanitize-k8s-service-records)]
     (assert-data-equal expected actual)))
 
 (deftest test-kill-instance
@@ -522,8 +543,8 @@
                      :expected-result true}]]
     (doseq [{:keys [api-server-response expected-result]} test-cases]
       (let [dummy-scheduler (make-dummy-scheduler [service-id])
-            actual-result (with-redefs [api-request (constantly api-server-response)]
-                            (scheduler/service-exists? dummy-scheduler service-id))]
+            _ (reset-scheduler-services-state! dummy-scheduler api-server-response)
+            actual-result (scheduler/service-exists? dummy-scheduler service-id)]
         (is (= expected-result actual-result))))))
 
 (deftest test-create-app
@@ -599,7 +620,9 @@
   (let [instances' 4
         service-id "test-service-id"
         service (scheduler/make-Service {:id service-id :instances 1 :k8s/app-name service-id :k8s/namespace "myself"})
-        dummy-scheduler (make-dummy-scheduler [service-id])]
+        service-state (atom {:services {service-id service}})
+        dummy-scheduler (-> (make-dummy-scheduler [service-id])
+                            (assoc :global-state service-state))]
     (with-redefs [service-id->service (constantly service)]
       (testing "successful-scale"
         (let [actual (with-redefs [api-request (constantly {:status "OK"})]
@@ -618,10 +641,7 @@
                   :message "Failed to scale missing service"}
                  actual))))
       (testing "unsuccessful-scale: patch conflict"
-        (let [actual (with-redefs [api-request (fn mocked-api-request [_ _ & {:keys [request-method]}]
-                                                 (if (= request-method :patch)
-                                                   (ss/throw+ {:status 409})
-                                                   {:spec {:replicas 1}}))]
+        (let [actual (with-redefs [api-request (fn [& _] (ss/throw+ {:status 409}))]
                        (scheduler/scale-service dummy-scheduler service-id instances' false))]
           (is (= {:success false
                   :status 409
@@ -695,6 +715,7 @@
                                  :default {:factory-fn 'waiter.authorization/noop-authorizer}}
                     :fileserver {:port 9090
                                  :scheme "http"}
+                    :global-state (atom nil)
                     :http-options {:conn-timeout 10000
                                    :socket-timeout 10000}
                     :max-patch-retries 5

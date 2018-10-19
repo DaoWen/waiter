@@ -103,14 +103,24 @@
     (catch Throwable t
       (log/error t "error converting ReplicaSet to Waiter Service"))))
 
+(defn k8s-object->id
+  "Get the id (name) from a ReplicaSet or Pod's metadata"
+  [k8s-obj]
+  (get-in k8s-obj [:metadata :name]))
+
+(defn k8s-object->service-id
+  "Get the Waiter service-id from a ReplicaSet or Pod's annotations"
+  [k8s-obj]
+  (get-in k8s-obj [:metadata :annotations :waiter/service-id]))
+
 (defn- pod->instance-id
   "Construct the Waiter instance-id for the given Kubernetes pod incarnation.
    Note that a new Waiter Service Instance is created each time a pod restarts,
    and that we generate a unique instance-id by including the pod's restartCount value."
   ([scheduler pod] (pod->instance-id scheduler pod (get-in pod [:status :containerStatuses 0 :restartCount])))
   ([{:keys [pod-suffix-length] :as scheduler} pod restart-count]
-   (let [pod-name (get-in pod [:metadata :name])
-         service-id (get-in pod [:metadata :annotations :waiter/service-id])]
+   (let [pod-name (k8s-object->id pod)
+         service-id (k8s-object->service-id pod)]
      (str service-id \. pod-name \- restart-count))))
 
 (defn- killed-by-k8s?
@@ -159,12 +169,12 @@
          :id (pod->instance-id scheduler pod)
          :k8s/app-name (get-in pod [:metadata :labels :app])
          :k8s/namespace (get-in pod [:metadata :namespace])
-         :k8s/pod-name (get-in pod [:metadata :name])
+         :k8s/pod-name (k8s-object->id pod)
          :k8s/restart-count (get-in pod [:status :containerStatuses 0 :restartCount])
          :log-directory (str "/home/" (get-in pod [:metadata :namespace]))
          :port port0
          :protocol (get-in pod [:metadata :annotations :waiter/protocol])
-         :service-id (get-in pod [:metadata :annotations :waiter/service-id])
+         :service-id (k8s-object->service-id pod)
          :started-at (-> pod
                          (get-in [:status :startTime])
                          (timestamp-str->datetime))}))
@@ -261,11 +271,9 @@
                       {:op :replace :path "/spec/replicas" :value replicas'}]))
 
 (defn- get-replica-count
-  "Query the current replica count for the given Kubernetes object."
+  "Query the current requested replica count for the given Kubernetes object."
   [{:keys [global-state] :as scheduler} service-id]
-  (let [service (-> global-state deref :services (get service-id))
-        {:keys [running staged]} (:task-stats service)]
-    (+ running staged)))
+  (-> global-state deref :services (get service-id) :instances))
 
 (defmacro k8s-patch-with-retries
   "Query the current replica count for the given Kubernetes object,
@@ -671,24 +679,24 @@
     {:items items
      :version resource-version}))
 
+;; TODO - need unit test for this
 (defn- global-pods-state-query
   [scheduler pods-url]
   (let [{:keys [items version]} (global-state-query scheduler pods-url)
-        grouped-instances (->> items
-                               (map (partial pod->ServiceInstance scheduler))
-                               (filter some?)
-                               (group-by :service-id)
-                               (pc/map-vals (partial pc/map-from-vals :id)))]
-    {:service-id->pods grouped-instances
+        grouped-pods (->> items
+                          (filter some?)
+                          (group-by k8s-object->service-id)
+                          (pc/map-vals (partial pc/map-from-vals k8s-object->id)))]
+    {:service-id->pods grouped-pods
      :version version}))
 
 (defn start-pods-watch!
   "Start a thread to continuously update the global-state atom based on watched Pod events."
   [{:keys [api-server-url global-state orchestrator-name] :as scheduler}]
   (let [pods-url (str api-server-url "/api/v1/pods?labelSelector=managed-by=" orchestrator-name)
-        {:keys [version instances] :as initial-state} (global-state-query scheduler pods-url)]
+        {:keys [version service-id->pods] :as initial-state} (global-pods-state-query scheduler pods-url)]
     (swap! global-state assoc
-           :service-id->pods instances
+           :service-id->pods service-id->pods
            :pods-version version)
     (->
       (fn pods-watch []
@@ -697,8 +705,8 @@
             (let [pods-watch-url (str pods-url "&watch=true&resourceVersion=" v)
                   json-stream (streaming-api-request pods-watch-url)]
               (doseq [{pod-state :object update-type :type :as obj} json-stream]
-                (let [id (get-in pod-state [:metadata :name])
-                      service-id (get-in pod-state [:metadata :annotations :waiter/service-id])]
+                (let [id (k8s-object->id pod-state)
+                      service-id (k8s-object->service-id pod-state)]
                   (scheduler/log "pod state update:" update-type pod-state)
                   (case update-type
                     "ADDED" (swap! global-state assoc-in [:service-id->pods service-id id] pod-state)
@@ -719,6 +727,7 @@
       Thread.
       .start)))
 
+;; TODO - need unit test for this
 (defn- global-rs-state-query
   [scheduler rs-url]
   (let [{:keys [items version]} (global-state-query scheduler rs-url)
