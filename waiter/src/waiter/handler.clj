@@ -596,9 +596,18 @@
   "Outputs the state obtained by invoking `retrieve-state-fn`."
   [retrieve-state-fn router-id request]
   (try
-    (-> {:router-id router-id
-         :state (retrieve-state-fn)}
-        (utils/clj->streaming-json-response))
+    (let [request-params (-> request ru/query-params-request :query-params)
+          selected-keys (some-> request-params
+                                (get "only-key")
+                                keyword
+                                vector)
+          scheduler-state (retrieve-state-fn)
+          filtered-scheduler-state (if (and selected-keys (map? scheduler-state))
+                                     (select-keys scheduler-state selected-keys)
+                                     scheduler-state)
+          response-data {:router-id router-id
+                         :state filtered-scheduler-state}]
+      (utils/clj->streaming-json-response response-data))
     (catch Exception ex
       (utils/exception->response ex request))))
 

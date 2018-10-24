@@ -872,3 +872,20 @@
             (is (service waiter-url service-id {}) (str service-id "not found in /apps endpoint")))
           (doseq [service-id service-ids]
             (delete-service waiter-url service-id)))))))
+
+(deftest ^:parallel ^:integration-fast test-state-endpoint-key-selection
+  (testing-using-waiter-url
+    (when (using-marathon? waiter-url)
+      (testing "multiple keys on unfiltered endpoint"
+        (let [{:keys [body] :as response} (make-request waiter-url "/state/scheduler")
+              state-json (-> body try-parse-json (get "state"))]
+          (assert-response-status response 200)
+          (is (< 1 (count state-json)))
+          (is (some? (get state-json "syncer")))))
+      (testing "single keys on filtered endpoint"
+        (let [{:keys [body] :as response} (make-request waiter-url "/state/scheduler?only-key=syncer")
+              state-json (-> body try-parse-json (get "state"))]
+          (assert-response-status response 200)
+          (is (< 1 (count state-json)))
+          (is (some? (get state-json "syncer"))))))))
+
