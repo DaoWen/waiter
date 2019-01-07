@@ -21,6 +21,9 @@ KITCHEN_DIR=${WAITER_DIR}/../kitchen
 # Start minikube
 ${DIR}/minikube-setup.sh
 
+# Start S3 test server
+${DIR}/s3-server-setup.sh
+
 # Ensure we have the docker image for the pods
 ${KITCHEN_DIR}/bin/build-docker-image.sh
 

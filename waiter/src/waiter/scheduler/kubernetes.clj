@@ -602,13 +602,22 @@
         home-path (str work-path "/latest")
         base-env (scheduler/environment service-id service-description
                                         service-id->password-fn home-path)
+        log-bucket (:bucket-url fileserver)
+        bucket-sync-secs (if log-bucket (:bucket-sync-secs fileserver) 0)
+        total-grace-secs (+ grace-period-secs bucket-sync-secs)
         ;; Make $PORT0 value pseudo-random to ensure clients can't hardcode it.
         ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
         port0 (-> service-id hash (mod 100) (* 10) (+ pod-base-port))
         env (into [;; We set these two "MESOS_*" variables to improve interoperability.
                    ;; New clients should prefer using WAITER_SANDBOX.
                    {:name "MESOS_DIRECTORY" :value home-path}
-                   {:name "MESOS_SANDBOX" :value home-path}]
+                   {:name "MESOS_SANDBOX" :value home-path}
+                   ;; Number of seconds to wait after receiving a sigterm
+                   ;; before sending a sigkill to the user's process.
+                   ;; This is handled by the waiter-init script,
+                   ;; separately from the pod's grace period,
+                   ;; in order to provide extra time for logs to sync to an s3 bucket.
+                   {:name "WAITER_GRACE_SECS" :value (str grace-period-secs)}]
                   (concat
                     (for [[k v] base-env]
                       {:name k :value v})
@@ -643,7 +652,7 @@
                                                                         :port port0
                                                                         :scheme backend-protocol-upper}
                                                               :failureThreshold health-check-max-consecutive-failures
-                                                              :initialDelaySeconds grace-period-secs
+                                                              :initialDelaySeconds total-grace-secs
                                                               :periodSeconds health-check-interval-secs
                                                               :timeoutSeconds 1}
                                               :name "waiter-app"
@@ -673,7 +682,9 @@
               memory (str mem "Mi")]
           {:command cmd
            :env [{:name "WAITER_FILESERVER_PORT"
-                  :value (str port)}]
+                  :value (str port)}
+                 {:name "WAITER_GRACE_SECS"
+                  :value (str grace-period-secs)}]
            :image image
            :imagePullPolicy "IfNotPresent"
            :name "waiter-fileserver"

@@ -352,7 +352,12 @@
                                  ;; The sidecar container is only added to Waiter-managed pods if the :port number is set in this map,
                                  ;; otherwise, the file browsing API is disabled (always returning an empty array).
                                  ;; You must ensure that the fileserver port number does not intersect with the pod-base-port range.
-                                 :fileserver {:cmd ["/bin/fileserver-start"]
+                                 ;; The :bucket-url setting is optional, but if it's non-nil, it should be the URL (string) of an S3 bucket
+                                 ;; where log files should be copied when a waiter service pod is terminated.
+                                 ;; When a :bucket-url is given, the pod waits up to :bucket-sync-secs seconds before terminating.
+                                 :fileserver {:bucket-sync-secs 180
+                                              :bucket "http://localhost:8888/waiter-service-logs"
+                                              :cmd ["/bin/fileserver-start"]
                                               :image "twosigma/waiter-fileserver:latest"
                                               :port 9090
                                               :resources {:cpu 0.1 :mem 128}
