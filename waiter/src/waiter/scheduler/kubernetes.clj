@@ -597,14 +597,15 @@
    {:strs [backend-proto cmd cpus grace-period-secs health-check-interval-secs
            health-check-max-consecutive-failures mem min-instances ports
            run-as-user] :as service-description}
-   {:keys [default-container-image] :as context}]
+   {:keys [default-container-image log-bucket-url] :as context}]
   (let [work-path (str "/home/" run-as-user)
         home-path (str work-path "/latest")
         base-env (scheduler/environment service-id service-description
                                         service-id->password-fn home-path)
-        log-bucket (:bucket-url fileserver)
-        bucket-sync-secs (if log-bucket (:bucket-sync-secs fileserver) 0)
-        total-grace-secs (+ grace-period-secs bucket-sync-secs)
+        ;; We include the default log-bucket-sync-secs value in the total-sigkill-delay-secs
+        ;; delay iff the log-bucket-url setting was given the scheduler config.
+        log-bucket-sync-secs (if log-bucket-url (:log-bucket-sync-secs context) 0)
+        total-sigkill-delay-secs (+ pod-sigkill-delay-secs log-bucket-sync-secs)
         ;; Make $PORT0 value pseudo-random to ensure clients can't hardcode it.
         ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
         port0 (-> service-id hash (mod 100) (* 10) (+ pod-base-port))
@@ -619,6 +620,9 @@
                    ;; in order to provide extra time for logs to sync to an s3 bucket.
                    {:name "WAITER_GRACE_SECS" :value (str grace-period-secs)}]
                   (concat
+                    (when log-bucket-url
+                      [{:name "WAITER_LOG_BUCKET_URL"
+                        :value (str log-bucket-url "/" run-as-user "/" service-id)}])
                     (for [[k v] base-env]
                       {:name k :value v})
                     (for [i (range ports)]
@@ -652,7 +656,7 @@
                                                                         :port port0
                                                                         :scheme backend-protocol-upper}
                                                               :failureThreshold health-check-max-consecutive-failures
-                                                              :initialDelaySeconds total-grace-secs
+                                                              :initialDelaySeconds grace-period-secs
                                                               :periodSeconds health-check-interval-secs
                                                               :timeoutSeconds 1}
                                               :name "waiter-app"
@@ -672,7 +676,7 @@
                                               :workingDir work-path}]
                                 :volumes [{:name "user-home"
                                            :emptyDir {}}]
-                                :terminationGracePeriodSeconds pod-sigkill-delay-secs}}}}
+                                :terminationGracePeriodSeconds total-sigkill-delay-secs}}}}
       ;; Optional fileserver sidecar container
       (integer? (:port fileserver))
       (update-in
@@ -872,10 +876,11 @@
 (defn kubernetes-scheduler
   "Returns a new KubernetesScheduler with the provided configuration. Validates the
    configuration against kubernetes-scheduler-schema and throws if it's not valid."
-  [{:keys [authentication authorizer cluster-name http-options max-patch-retries max-name-length
-           pod-base-port pod-sigkill-delay-secs pod-suffix-length replicaset-api-version replicaset-spec-builder
-           scheduler-name scheduler-state-chan scheduler-syncer-interval-secs service-id->service-description-fn
-           service-id->password-fn url start-scheduler-syncer-fn watch-retries]
+  [{:keys [authentication authorizer cluster-name http-options log-bucket-sync-secs log-bucket-url
+           max-patch-retries max-name-length pod-base-port pod-sigkill-delay-secs pod-suffix-length
+           replicaset-api-version replicaset-spec-builder scheduler-name scheduler-state-chan
+           scheduler-syncer-interval-secs service-id->service-description-fn service-id->password-fn
+           url start-scheduler-syncer-fn watch-retries]
     {fileserver-port :port fileserver-scheme :scheme :as fileserver} :fileserver}]
   {:pre [(schema/contains-kind-sub-map? authorizer)
          (or (nil? fileserver-port)
@@ -884,6 +889,8 @@
          (re-matches #"https?" fileserver-scheme)
          (utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
+         (<= 0 log-bucket-sync-secs 300)
+         (or (nil? log-bucket-url) (some? (io/as-url log-bucket-url)))
          (utils/non-neg-int? max-patch-retries)
          (utils/pos-int? max-name-length)
          (not (string/blank? cluster-name))
@@ -907,13 +914,16 @@
                         (utils/assoc-if-absent :user-agent "waiter-k8s")
                         http-utils/http-client-factory)
         service-id->failed-instances-transient-store (atom {})
+        replicaset-spec-builder-ctx (assoc replicaset-spec-builder
+                                           :log-bucket-sync-secs log-bucket-sync-secs
+                                           :log-bucket-url log-bucket-url)
         replicaset-spec-builder-fn (let [f (-> replicaset-spec-builder
                                                :factory-fn
                                                utils/resolve-symbol
                                                deref)]
                                      (assert (fn? f) "ReplicaSet spec function must be a Clojure fn")
                                      (fn [scheduler service-id service-description]
-                                       (f scheduler service-id service-description replicaset-spec-builder)))
+                                       (f scheduler service-id service-description replicaset-spec-builder-ctx)))
         watch-options (cond-> default-watch-options
                         (some? watch-retries)
                         (assoc :watch-retries watch-retries))

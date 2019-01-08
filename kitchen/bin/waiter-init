@@ -56,6 +56,10 @@ handle_k8s_terminate() {
 
     # send logs to S3 (if enabled)
     if [ "$WAITER_LOG_BUCKET_URL" ]; then
+        # Extract this pod's name from the hostname
+        # (this is used to create a unique path in S3)
+        pod_name=$(hostname --short)
+        base_url="$WAITER_LOG_BUCKET_URL/$pod_name"
         # For each ./r* directory created by a container restart,
         # we upload the stdout and stderr, and build an index.json file
         # that is also uploaded to the target directory in the S3 bucket.
@@ -69,12 +73,12 @@ handle_k8s_terminate() {
                 logfile="r$i/$f"
                 # Using the -T option with curl PUTs the target file to the given URL,
                 # and avoids loading the full file into memory when sending the payload.
-                curl -s -T "$logfile" "$WAITER_LOG_BUCKET_URL/$logfile"
+                curl -s -T "$logfile" "$base_url/$logfile"
                 printf '%s\n{"name":"%s","type":"file","size":%d}' "$separator" "$f" "$(stat -c%s $logfile)" >> $indextmp
                 separator=','
             done
             printf '\n]\n' >> $indextmp
-            curl -s -T "$indextmp" "$WAITER_LOG_BUCKET_URL/r$i/index.json"
+            curl -s -T "$indextmp" "$base_url/r$i/index.json"
         done
     fi
 

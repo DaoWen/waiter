@@ -295,18 +295,18 @@
                              :mesos-slave-port 5051
                              :search-interval-days 10}
                       :kubernetes {; Default values are not provided below for the following keys:
-                                   ; :authentication [:fileserver :bucket] [:fileserver :port] :url
+                                   ; :authentication [:fileserver :port] :log-bucket-url :url
                                    :factory-fn 'waiter.scheduler.kubernetes/kubernetes-scheduler
                                    :authorizer {:kind :default
                                                 :default {:factory-fn 'waiter.authorization/noop-authorizer}}
                                    :cluster-name "waiter"
-                                   :fileserver {:bucket-sync-secs 180
-                                                :cmd ["/bin/fileserver-start"]
+                                   :fileserver {:cmd ["/bin/fileserver-start"]
                                                 :image "twosigma/waiter-fileserver:latest"
                                                 :resources {:cpu 0.1 :mem 128}
                                                 :scheme "http"}
                                    :http-options {:conn-timeout 10000
                                                   :socket-timeout 10000}
+                                   :log-bucket-sync-secs 180
                                    :max-patch-retries 5
                                    :max-name-length 63
                                    :pod-base-port 31000

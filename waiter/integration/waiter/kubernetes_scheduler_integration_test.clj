@@ -34,3 +34,132 @@
                     (< initial-rs-snapshot-version initial-rs-watch-version)))
             (is (<= initial-rs-snapshot-version rs-snapshot-version'))
             (is (< rs-snapshot-version' rs-watch-version'))))))))
+
+(deftest ^:parallel ^:integration-slow ^:resource-heavy test-s3-logs
+  (testing-using-waiter-url
+    (let [headers {:x-waiter-name (rand-name)
+                   :x-waiter-max-instances 2
+                   :x-waiter-scale-up-factor 0.99
+                   :x-waiter-scale-down-factor 0.99
+                   :x-kitchen-delay-ms 5000}
+          _ (log/info "making canary request...")
+          {:keys [cookies instance-id service-id]} (make-request-with-debug-info headers #(make-kitchen-request waiter-url %))
+          request-fn (fn [] (->> #(make-kitchen-request waiter-url %)
+                                 (make-request-with-debug-info headers)
+                                 :instance-id))]
+      (with-service-cleanup
+        service-id
+        (assert-service-on-all-routers waiter-url service-id cookies)
+        ;; Get a service with at least one active and one killed instance.
+        ;; This portion of the test logic was copied from basic-test/test-killed-instances
+        (log/info "starting parallel requests")
+        (let [instance-ids-atom (atom #{})
+              instance-request-fn (fn []
+                                    (let [instance-id (request-fn)]
+                                      (swap! instance-ids-atom conj instance-id)))
+              instance-ids (->> (parallelize-requests 4 25 instance-request-fn
+                                                      :canceled? (fn [] (> (count @instance-ids-atom) 2))
+                                                      :service-id service-id)
+                                (reduce set/union))]
+          (is (> (count instance-ids) 1) (str instance-ids)))
+
+        (log/info "waiting for at least one instance to get killed")
+        (is (wait-for #(->> (get-in (service-settings waiter-url service-id) [:instances :killed-instances])
+                            (map :id)
+                            set
+                            seq)
+                      :interval 2 :timeout 45)
+            (str "No killed instances found for " service-id))
+        ;; Test that the active instances' logs are available.
+        ;; This portion of the test logic was copied from basic-test/test-basic-logs
+        (let [active-instances (get-in (service-settings waiter-url service-id :cookies cookies)
+                                       [:instances :active-instances])
+              log-url (:log-url (first active-instances))
+              _ (log/debug "Log Url 1:" log-url)
+              make-request-fn (fn [url] (make-request url "" :verbose true))
+              {:keys [body] :as logs-response} (make-request-fn log-url)
+              _ (assert-response-status logs-response 200)
+              _ (log/debug "Response body:" body)
+              log-files-list (walk/keywordize-keys (json/read-str body))
+              stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
+              stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
+          (is (every? #(str/includes? body %) ["stderr" "stdout"])
+              (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
+          (is (str/includes? body service-id)
+              (str "Directory listing is missing entries: " service-id
+                   ": got response: " logs-response))
+          (doseq [file-link [stderr-file-link stdout-file-link]]
+            (if (str/starts-with? (str file-link) "http")
+              (assert-response-status (make-request-fn file-link) 200)
+              (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))
+        (delete-service waiter-url service-id)
+        ;; Test that the killed instances' logs were persisted to S3.
+        ;; This portion of the test logic was modified from the active-instances tests above.
+        (let [killed-instances (get-in (service-settings waiter-url service-id :cookies cookies)
+                                       [:instances :killed-instances])
+              log-url (:log-url (first killed-instances))
+              _ (log/debug "Log Url 2:" log-url)
+              make-request-fn (fn [url] (make-request url "" :verbose true))
+              {:keys [body] :as logs-response} (make-request-fn log-url)
+              _ (assert-response-status logs-response 200)
+              _ (log/debug "Response body:" body)
+              log-files-list (walk/keywordize-keys (json/read-str body))
+              stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
+              stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
+          (is (every? #(str/includes? body %) ["stderr" "stdout"])
+              (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
+          (is (str/includes? body service-id)
+              (str "Directory listing is missing entries: " service-id
+                   ": got response: " logs-response))
+          (doseq [file-link [stderr-file-link stdout-file-link]]
+            (if (str/starts-with? (str file-link) "http")
+              (assert-response-status (make-request-fn file-link) 200)
+              (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))))))
+
+(deftest ^:parallel ^:integration-fast ^:resource-heavy 
+  (testing-using-waiter-url
+    (let [waiter-headers {:x-waiter-name (rand-name)}
+          {:keys [cookies service-id]} (make-request-with-debug-info waiter-headers #(make-kitchen-request waiter-url %))]
+      (assert-service-on-all-routers waiter-url service-id cookies)
+      (let [active-instances (get-in (service-settings waiter-url service-id :cookies cookies)
+                                     [:instances :active-instances])
+            log-url (:log-url (first active-instances))
+            _ (log/debug "Log Url 1:" log-url)
+            make-request-fn (fn [url] (make-request url "" :verbose true))
+            {:keys [body] :as logs-response} (make-request-fn log-url)
+            _ (assert-response-status logs-response 200)
+            _ (log/debug "Response body:" body)
+            log-files-list (walk/keywordize-keys (json/read-str body))
+            stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
+            stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
+        (is (every? #(str/includes? body %) ["stderr" "stdout"])
+            (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
+        (is (str/includes? body service-id)
+            (str "Directory listing is missing entries: " service-id
+                 ": got response: " logs-response))
+        (doseq [file-link [stderr-file-link stdout-file-link]]
+          (if (str/starts-with? (str file-link) "http")
+            (assert-response-status (make-request-fn file-link) 200)
+            (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))
+      (delete-service waiter-url service-id)
+      (let [killed-instances (get-in (service-settings waiter-url service-id :cookies cookies)
+                                     [:instances :killed-instances])
+            log-url (:log-url (first killed-instances))
+            _ (log/debug "Log Url 2:" log-url)
+            make-request-fn (fn [url] (make-request url "" :verbose true))
+            {:keys [body] :as logs-response} (make-request-fn log-url)
+            _ (assert-response-status logs-response 200)
+            _ (log/debug "Response body:" body)
+            log-files-list (walk/keywordize-keys (json/read-str body))
+            stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
+            stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
+        (is (every? #(str/includes? body %) ["stderr" "stdout"])
+            (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
+        (is (str/includes? body service-id)
+            (str "Directory listing is missing entries: " service-id
+                 ": got response: " logs-response))
+        (doseq [file-link [stderr-file-link stdout-file-link]]
+          (if (str/starts-with? (str file-link) "http")
+            (assert-response-status (make-request-fn file-link) 200)
+            (log/warn "test-basic-logs did not verify file link:" stdout-file-link)))) )))
+

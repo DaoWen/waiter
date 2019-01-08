@@ -23,8 +23,8 @@
  :scheduler-config {:kind :kubernetes
                     :kubernetes {:authorizer {:kind :sanity-check
                                               :sanity-check {:factory-fn waiter.authorization/sanity-check-authorizer}}
-                                 :fileserver {:bucket-url "http://localhost:8888/waiter-service-logs"
-                                              :port 591}
+                                 :fileserver {:port 591}
+                                 :log-bucket-url #config/env "WAITER_S3_BUCKET"
                                  :url "http://localhost:8001"}}
 
  ; ---------- Error Handling ----------
