@@ -5,7 +5,14 @@ set -e
 # Run cloudserver (S3 compatible test server) via docker
 # The API server endpoint is accessible via localhost:8888
 # https://hub.docker.com/r/scality/s3server
-docker run --detach --rm --publish=8888:8000 scality/s3server:6018536a
+echo Starting S3 server docker container
+docker run --name s3server --detach --rm --publish=8888:8000 scality/s3server:6018536a
+echo -n Waiting for S3 server
+while ! curl localhost:8888 &>/dev/null; do
+    echo -n .
+    sleep 1
+done
+echo
 
 # Install AWS CLI (for s3api commands) via pip
 # We use this to handle S3 authentication for bucket creation
