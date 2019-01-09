@@ -138,7 +138,7 @@
 (defn- unpack-instance-id
   "Extract the service-id, pod name, and pod restart-number from an instance-id."
   [instance-id]
-   (let [[_ service-id pod-name restart-number] (re-find #"^(.*)\.([-a-z0-9])-(\d)+$" instance-id)]
+   (let [[_ service-id pod-name restart-number] (re-find #"^([-a-z0-9]+)\.([-a-z0-9]+)-(\d)+$" instance-id)]
      {:service-id service-id
       :pod-name pod-name
       :restart-number restart-number}))
@@ -907,7 +907,7 @@
          (re-matches #"https?" fileserver-scheme)
          (utils/pos-int? (:socket-timeout http-options))
          (utils/pos-int? (:conn-timeout http-options))
-         (<= 0 log-bucket-sync-secs 300)
+         (and (number? log-bucket-sync-secs) (<= 0 log-bucket-sync-secs 300))
          (or (nil? log-bucket-url) (some? (io/as-url log-bucket-url)))
          (utils/non-neg-int? max-patch-retries)
          (utils/pos-int? max-name-length)
