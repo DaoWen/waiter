@@ -1,5 +1,10 @@
 (ns waiter.kubernetes-scheduler-integration-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.data.json :as json]
+            [clojure.set :as set]
+            [clojure.string :as string]
+            [clojure.walk :as walk]
+            [clojure.test :refer :all]
+            [clojure.tools.logging :as log]
             [waiter.util.client-tools :refer :all]))
 
 (deftest ^:parallel ^:integration-fast test-kubernetes-watch-state-update
@@ -57,8 +62,9 @@
               instance-request-fn (fn []
                                     (let [instance-id (request-fn)]
                                       (swap! instance-ids-atom conj instance-id)))
-              instance-ids (->> (parallelize-requests 4 25 instance-request-fn
+              instance-ids (->> (parallelize-requests 4 10 instance-request-fn
                                                       :canceled? (fn [] (> (count @instance-ids-atom) 2))
+                                                      :verbose true
                                                       :service-id service-id)
                                 (reduce set/union))]
           (is (> (count instance-ids) 1) (str instance-ids)))
@@ -75,7 +81,7 @@
         (let [active-instances (get-in (service-settings waiter-url service-id :cookies cookies)
                                        [:instances :active-instances])
               log-url (:log-url (first active-instances))
-              _ (log/debug "Log Url 1:" log-url)
+              _ (log/debug "Log Url Active:" log-url)
               make-request-fn (fn [url] (make-request url "" :verbose true))
               {:keys [body] :as logs-response} (make-request-fn log-url)
               _ (assert-response-status logs-response 200)
@@ -83,13 +89,10 @@
               log-files-list (walk/keywordize-keys (json/read-str body))
               stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
               stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
-          (is (every? #(str/includes? body %) ["stderr" "stdout"])
+          (is (every? #(string/includes? body %) ["stderr" "stdout"])
               (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
-          (is (str/includes? body service-id)
-              (str "Directory listing is missing entries: " service-id
-                   ": got response: " logs-response))
           (doseq [file-link [stderr-file-link stdout-file-link]]
-            (if (str/starts-with? (str file-link) "http")
+            (if (string/starts-with? (str file-link) "http")
               (assert-response-status (make-request-fn file-link) 200)
               (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))
         (delete-service waiter-url service-id)
@@ -98,7 +101,7 @@
         (let [killed-instances (get-in (service-settings waiter-url service-id :cookies cookies)
                                        [:instances :killed-instances])
               log-url (:log-url (first killed-instances))
-              _ (log/debug "Log Url 2:" log-url)
+              _ (log/debug "Log Url Killed:" log-url)
               make-request-fn (fn [url] (make-request url "" :verbose true))
               {:keys [body] :as logs-response} (make-request-fn log-url)
               _ (assert-response-status logs-response 200)
@@ -106,17 +109,14 @@
               log-files-list (walk/keywordize-keys (json/read-str body))
               stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
               stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
-          (is (every? #(str/includes? body %) ["stderr" "stdout"])
+          (is (every? #(string/includes? body %) ["stderr" "stdout"])
               (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
-          (is (str/includes? body service-id)
-              (str "Directory listing is missing entries: " service-id
-                   ": got response: " logs-response))
           (doseq [file-link [stderr-file-link stdout-file-link]]
-            (if (str/starts-with? (str file-link) "http")
+            (if (string/starts-with? (str file-link) "http")
               (assert-response-status (make-request-fn file-link) 200)
               (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))))))
 
-(deftest ^:parallel ^:integration-fast ^:resource-heavy 
+(comment ^:parallel ^:integration-fast ^:resource-heavy 
   (testing-using-waiter-url
     (let [waiter-headers {:x-waiter-name (rand-name)}
           {:keys [cookies service-id]} (make-request-with-debug-info waiter-headers #(make-kitchen-request waiter-url %))]
@@ -132,13 +132,13 @@
             log-files-list (walk/keywordize-keys (json/read-str body))
             stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
             stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
-        (is (every? #(str/includes? body %) ["stderr" "stdout"])
+        (is (every? #(string/includes? body %) ["stderr" "stdout"])
             (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
-        (is (str/includes? body service-id)
+        (is (string/includes? body service-id)
             (str "Directory listing is missing entries: " service-id
                  ": got response: " logs-response))
         (doseq [file-link [stderr-file-link stdout-file-link]]
-          (if (str/starts-with? (str file-link) "http")
+          (if (string/starts-with? (str file-link) "http")
             (assert-response-status (make-request-fn file-link) 200)
             (log/warn "test-basic-logs did not verify file link:" stdout-file-link))))
       (delete-service waiter-url service-id)
@@ -153,13 +153,13 @@
             log-files-list (walk/keywordize-keys (json/read-str body))
             stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
             stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
-        (is (every? #(str/includes? body %) ["stderr" "stdout"])
+        (is (every? #(string/includes? body %) ["stderr" "stdout"])
             (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
-        (is (str/includes? body service-id)
+        (is (string/includes? body service-id)
             (str "Directory listing is missing entries: " service-id
                  ": got response: " logs-response))
         (doseq [file-link [stderr-file-link stdout-file-link]]
-          (if (str/starts-with? (str file-link) "http")
+          (if (string/starts-with? (str file-link) "http")
             (assert-response-status (make-request-fn file-link) 200)
             (log/warn "test-basic-logs did not verify file link:" stdout-file-link)))) )))
 
