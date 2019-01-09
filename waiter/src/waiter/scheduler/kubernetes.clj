@@ -135,6 +135,14 @@
          service-id (k8s-object->service-id pod)]
      (str service-id \. pod-name \- restart-count))))
 
+(defn- unpack-instance-id
+  "Extract the service-id, pod name, and pod restart-number from an instance-id."
+  [instance-id]
+   (let [[_ service-id pod-name restart-number] (re-find #"^(.*)\.([-a-z0-9])-(\d)+$" instance-id)]
+     {:service-id service-id
+      :pod-name pod-name
+      :restart-number restart-number}))
+
 (defn- log-dir-path [namespace restart-count]
   "Build log directory path string for a containter run."
   (str "/home/" namespace "/r" restart-count))
@@ -444,6 +452,7 @@
                                 daemon-state
                                 fileserver
                                 http-client
+                                log-bucket-url
                                 max-patch-retries
                                 max-name-length
                                 pod-base-port
@@ -543,14 +552,13 @@
          :message "Error while scaling waiter service"})))
 
   (retrieve-directory-content
-    [{:keys [http-client] {:keys [port scheme]} :fileserver}
-     _ instance-id host browse-path]
+    [{:keys [http-client log-bucket-url service-id->service-description-fn watch-state]
+      {:keys [port scheme]} :fileserver}
+     service-id instance-id host browse-path]
     (let [auth-str @k8s-api-auth-str
           headers (when auth-str {"Authorization" auth-str})
-          instance-restart-number (->> (string/last-index-of instance-id \-)
-                                       inc
-                                       (subs instance-id))
-          instance-base-dir (str "/r" instance-restart-number)
+          {:keys [_ pod-name restart-number]} (unpack-instance-id instance-id)
+          instance-base-dir (str "/r" restart-number)
           browse-path (if (string/blank? browse-path) "/" browse-path)
           browse-path (cond->
                         browse-path
@@ -558,8 +566,19 @@
                         (str "/")
                         (not (string/starts-with? browse-path "/"))
                         (->> (str "/")))
-          target-url (str scheme "://" host ":" port instance-base-dir browse-path)]
-      (when port
+          run-as-user (-> service-id
+                          service-id->service-description-fn
+                          service-description->namespace)
+          pod (get-in @watch-state [:service-id->pod-id->pod service-id pod-name])
+          target-url (if pod
+                       ;; the pod is live: try accessing logs through sidecar
+                       (when port
+                         (str scheme "://" host ":" port instance-base-dir browse-path))
+                       ;; the pod is not live: try accessing logs through S3
+                       (when log-bucket-url
+                         (str log-bucket-url "/" run-as-user "/" service-id "/"
+                              pod-name instance-base-dir browse-path)))]
+      (when target-url
         (ss/try+
           (let [result (http-utils/http-request
                          http-client
@@ -586,7 +605,9 @@
      :syncer (retrieve-syncer-state-fn)})
 
   (validate-service [_ service-id]
-    (let [{:strs [run-as-user]} (service-id->service-description-fn service-id)]
+    (let [run-as-user (-> service-id
+                          service-id->service-description-fn
+                          service-description->namespace)]
       (authz/check-user authorizer run-as-user service-id))))
 
 (defn default-replicaset-builder
@@ -946,6 +967,7 @@
                                            daemon-state
                                            fileserver
                                            http-client
+                                           log-bucket-url
                                            max-patch-retries
                                            max-name-length
                                            pod-base-port
