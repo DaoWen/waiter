@@ -25,6 +25,7 @@
                                               :sanity-check {:factory-fn waiter.authorization/sanity-check-authorizer}}
                                  :fileserver {:port 591}
                                  :log-bucket-url #config/env-default ["WAITER_S3_BUCKET" nil]
+                                 :log-bucket-sync-secs 10
                                  :url "http://localhost:8001"}}
 
  ; ---------- Error Handling ----------
