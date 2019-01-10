@@ -51,6 +51,8 @@
       :cluster-name "waiter"
       :fileserver {:port 9090
                    :scheme "http"}
+      :log-bucket-sync-secs 60
+      :log-bucket-url nil
       :max-patch-retries 5
       :max-name-length 63
       :pod-base-port 8080
@@ -664,11 +666,12 @@
 
 (deftest test-retrieve-directory-content
   (let [service-id "test-service-id"
-        instance-id "test-service-instance-id-0"
+        instance-id "test-service-id.instance-id-0"
         instance-base-dir "/r0"
+        pod-name "instance-id"
         host "host.local"
         path "/some/path/"
-        dummy-scheduler (make-dummy-scheduler [service-id])
+        {:keys [watch-state] :as dummy-scheduler} (make-dummy-scheduler [service-id])
         port (get-in dummy-scheduler [:fileserver :port])
         make-file (fn [file-name size]
                     {:url (str "http://" host ":" port instance-base-dir path file-name)
@@ -695,6 +698,7 @@
                             (make-dir "x")
                             (make-dir "y")
                             (make-dir "z")]}]]
+    (swap! watch-state assoc-in [:service-id->pod-id->pod service-id pod-name] ::pod)
     (doseq [{:keys [description expected]} inputs]
       (testing description
         (let [actual (with-redefs [hu/http-request (constantly (strip-links expected))]
@@ -725,6 +729,8 @@
                     :watch-state (atom nil)
                     :http-options {:conn-timeout 10000
                                    :socket-timeout 10000}
+                    :log-bucket-sync-secs 60
+                    :log-bucket-url nil
                     :max-patch-retries 5
                     :max-name-length 63
                     :pod-base-port 8080
