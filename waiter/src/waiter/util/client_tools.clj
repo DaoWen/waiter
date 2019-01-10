@@ -566,8 +566,8 @@
                              verbose false
                              wait-for-tasks true}}]
   (let [pool (Executors/newFixedThreadPool nthreads)
-        start-counter (atom 0)
-        finish-counter (atom 0)
+        start-counter (ref 0)
+        finish-counter (ref 0)
         target-count (* nthreads niters)
         print-state-fn #(when verbose
                           (log/info (str (when service-id (str "requests to " service-id ":")))
@@ -582,27 +582,33 @@
                      :else 2)
         checkpoints (set (map #(quot (* % target-count) num-groups) (range 1 num-groups)))
         client http-client
-        _ (print-state-fn)
-        tasks (repeatedly nthreads
-                          #(retrieve-task
-                             (binding [http-client client]
-                               (loop [iter-id 1
-                                      result []]
-                                 (swap! start-counter inc)
-                                 (let [loop-result (f)
-                                       result' (conj result loop-result)
-                                       finish-counter' (swap! finish-counter inc)]
-                                   (when (contains? checkpoints finish-counter') (print-state-fn))
-                                   (Thread/sleep 100)
-                                   (if (or (>= iter-id niters) (canceled?))
-                                     result'
-                                     (recur (inc iter-id) result')))))))
-        futures (mapv #(.submit pool ^Callable %) tasks)]
+        tasks (map (fn [_]
+                     (retrieve-task
+                       (binding [http-client client]
+                         (loop [iter-id 1
+                                result []]
+                           (dosync (alter start-counter inc))
+                           (let [loop-result (f)
+                                 result' (conj result loop-result)]
+                             (dosync
+                               (alter finish-counter inc)
+                               (when (contains? checkpoints @finish-counter) (print-state-fn)))
+                             (Thread/sleep 100)
+                             (if (or (>= iter-id niters) (canceled?))
+                               result'
+                               (recur (inc iter-id) result')))))))
+                   (range nthreads))
+        futures (loop [futures []
+                       [task & remaining-tasks] tasks]
+                  (if task
+                    (recur (conj futures (.submit pool ^Callable task))
+                           remaining-tasks)
+                    futures))]
     (when wait-for-tasks (await-futures futures))
     (.shutdown pool)
     (print-state-fn)
     (if wait-for-tasks
-      (vec (reduce #(into %1 (.get ^Future %2)) [] futures))
+      (vec (reduce #(concat %1 (.get ^Future %2)) [] futures))
       futures)))
 
 (defn rand-name
