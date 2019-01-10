@@ -176,6 +176,7 @@
         (log/info "reading settings from file:" config-file-path)
         (let [edn-readers {:readers {'config/regex (fn [expr] (re-pattern expr))
                                      'config/env #(env % config-file-path)
+                                     'config/env-default (fn [[var-name default]] (System/getenv var-name default))
                                      'config/env-int #(Integer/parseInt (env % config-file-path))}}
               settings (edn/read-string edn-readers (slurp config-file-path))]
           (log/info "configured settings:\n" (with-out-str (clojure.pprint/pprint settings)))
