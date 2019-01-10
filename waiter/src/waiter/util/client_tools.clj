@@ -602,7 +602,7 @@
     (.shutdown pool)
     (print-state-fn)
     (if wait-for-tasks
-      (vec (reduce #(concat %1 (.get ^Future %2)) [] futures))
+      (vec (reduce #(into %1 (.get ^Future %2)) [] futures))
       futures)))
 
 (defn rand-name
