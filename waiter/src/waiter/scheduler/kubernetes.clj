@@ -210,6 +210,12 @@
       (log/error e "error converting pod to waiter service instance" pod)
       (comment "Returning nil on failure."))))
 
+(defn- pod-live? [pod]
+  "Returns true if the given pod has at least one container still running."
+  (and (some? pod)
+       (not (and (get-in pod [:status :containerStatuses 0 :state :terminated])
+                 (get-in pod [:status :containerStatuses 1 :state :terminated])))))
+
 (defn streaming-api-request
   "Make a long-lived HTTP request to the Kubernetes API server using the configured authentication.
    If data is provided via :body, the application/json content type is added automatically.
@@ -570,7 +576,7 @@
                           service-id->service-description-fn
                           service-description->namespace)
           pod (get-in @watch-state [:service-id->pod-id->pod service-id pod-name])
-          target-url (if pod
+          target-url (if (pod-live? pod)
                        ;; the pod is live: try accessing logs through sidecar
                        (when port
                          (str scheme "://" host ":" port instance-base-dir browse-path))

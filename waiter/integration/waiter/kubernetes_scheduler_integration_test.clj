@@ -104,16 +104,19 @@
                 killed-instances (get-in (service-settings waiter-url service-id :cookies cookies)
                                          [:instances :killed-instances])
                 log-url (:log-url (first killed-instances))
-                _ (log/debug "Log Url Killed:" log-url)
                 make-request-fn (fn [url] (make-request url "" :verbose true))
+                try-count (atom 0)
                 _ (do
                     (log/info "waiting s3 logs to appear")
                     (is (wait-for
-                          #(let [{:keys [body] :as logs-response} (make-request-fn log-url)]
+                          #(let [n (swap! try-count inc)
+                                 _ (log/info "TRY NUMBER" n)
+                                 {:keys [body] :as logs-response} (make-request-fn log-url)]
                              (log/info "Log Url Killed ready?" log-url body "vs" log-bucket-url)
                              (string/includes? body log-bucket-url))
                           :interval 1 :timeout 60)
                         (str "Log URL never pointed to S3 bucket " log-bucket-url)))
+                _ (log/debug "Log Url Killed:" log-url)
                 {:keys [body] :as logs-response} (make-request-fn log-url)
                 _ (assert-response-status logs-response 200)
                 _ (log/debug "Response body:" body)
