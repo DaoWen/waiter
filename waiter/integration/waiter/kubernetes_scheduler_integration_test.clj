@@ -105,14 +105,10 @@
                                          [:instances :killed-instances])
                 log-url (:log-url (first killed-instances))
                 make-request-fn (fn [url] (make-request url "" :verbose true))
-                try-count (atom 0)
                 _ (do
                     (log/info "waiting s3 logs to appear")
                     (is (wait-for
-                          #(let [n (swap! try-count inc)
-                                 _ (log/info "TRY NUMBER" n)
-                                 {:keys [body] :as logs-response} (make-request-fn log-url)]
-                             (log/info "Log Url Killed ready?" log-url body "vs" log-bucket-url)
+                          #(let [{:keys [body] :as logs-response} (make-request-fn log-url)]
                              (string/includes? body log-bucket-url))
                           :interval 1 :timeout 60)
                         (str "Log URL never pointed to S3 bucket " log-bucket-url)))
@@ -123,7 +119,9 @@
                 log-files-list (walk/keywordize-keys (json/read-str body))
                 stdout-file-link (:url (first (filter #(= (:name %) "stdout") log-files-list)))
                 stderr-file-link (:url (first (filter #(= (:name %) "stderr") log-files-list)))]
-            (is (every? #(string/includes? body %) ["stderr" "stdout"])
+            (is (wait-for
+                  #(every? (partial string/includes? body) ["stderr" "stdout"])
+                  :interval 1 :timeout 30)
                 (str "Directory listing is missing entries: stderr and stdout, got response: " logs-response))
             (doseq [file-link [stderr-file-link stdout-file-link]]
               (if (string/starts-with? (str file-link) "http")

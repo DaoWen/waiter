@@ -17,9 +17,12 @@
   (:require [cheshire.core :as cheshire]
             [clj-http.client :as clj-http]
             [clj-time.core :as t]
+            [clojure.data.zip.xml :as zx]
             [clojure.java.io :as io]
             [clojure.string :as string]
             [clojure.tools.logging :as log]
+            [clojure.xml :as xml]
+            [clojure.zip :as zip]
             [plumbing.core :as pc]
             [slingshot.slingshot :as ss]
             [waiter.authorization :as authz]
@@ -138,7 +141,7 @@
 (defn- unpack-instance-id
   "Extract the service-id, pod name, and pod restart-number from an instance-id."
   [instance-id]
-   (let [[_ service-id pod-name restart-number] (re-find #"^([-a-z0-9]+)\.([-a-z0-9]+)-(\d)+$" instance-id)]
+   (let [[_ service-id pod-name restart-number] (re-find #"^([-a-z0-9]+)\.([-a-z0-9]+)-(\d+)$" instance-id)]
      {:service-id service-id
       :pod-name pod-name
       :restart-number restart-number}))
@@ -210,11 +213,10 @@
       (log/error e "error converting pod to waiter service instance" pod)
       (comment "Returning nil on failure."))))
 
-(defn- pod-live? [pod]
-  "Returns true if the given pod has at least one container still running."
+(defn- pod-logs-live? [pod]
+  "Returns true if the given pod has its log fileserver running."
   (and (some? pod)
-       (not (and (get-in pod [:status :containerStatuses 0 :state :terminated])
-                 (get-in pod [:status :containerStatuses 1 :state :terminated])))))
+       (nil? (get-in pod [:status :containerStatuses 1 :state :terminated]))))
 
 (defn streaming-api-request
   "Make a long-lived HTTP request to the Kubernetes API server using the configured authentication.
@@ -561,10 +563,8 @@
     [{:keys [http-client log-bucket-url service-id->service-description-fn watch-state]
       {:keys [port scheme]} :fileserver}
      service-id instance-id host browse-path]
-    (let [auth-str @k8s-api-auth-str
-          headers (when auth-str {"Authorization" auth-str})
-          {:keys [_ pod-name restart-number]} (unpack-instance-id instance-id)
-          instance-base-dir (str "/r" restart-number)
+    (let [{:keys [_ pod-name restart-number]} (unpack-instance-id instance-id)
+          instance-base-dir (str "r" restart-number)
           browse-path (if (string/blank? browse-path) "/" browse-path)
           browse-path (cond->
                         browse-path
@@ -575,32 +575,47 @@
           run-as-user (-> service-id
                           service-id->service-description-fn
                           service-description->namespace)
-          pod (get-in @watch-state [:service-id->pod-id->pod service-id pod-name])
-          target-url (if (pod-live? pod)
-                       ;; the pod is live: try accessing logs through sidecar
-                       (when port
-                         (str scheme "://" host ":" port instance-base-dir browse-path))
-                       ;; the pod is not live: try accessing logs through S3
-                       (when log-bucket-url
-                         (str log-bucket-url "/" run-as-user "/" service-id "/"
-                              pod-name instance-base-dir browse-path)))
-          listing-url (if pod target-url (str target-url "index.json"))]
-      (when target-url
-        (ss/try+
-          (let [result (http-utils/http-request
-                         http-client
-                         listing-url
-                         :accept "application/json"
-                         :content-type "application/json"
-                         :headers headers)]
-            (for [{entry-name :name entry-type :type :as entry} result]
-              (if (= "file" entry-type)
-                (assoc entry :url (str target-url entry-name))
-                (assoc entry :path (str browse-path entry-name)))))
-          (catch [:client http-client] response
-            (log/error "request to fileserver failed: " target-url response))
-          (catch Throwable t
-            (log/error t "request to fileserver failed"))))))
+          pod (get-in @watch-state [:service-id->pod-id->pod service-id pod-name])]
+      (ss/try+
+        (if (pod-logs-live? pod)
+          ;; the pod is live: try accessing logs through sidecar
+          (when port
+            (let [target-url (str scheme "://" host ":" port "/" instance-base-dir browse-path)
+                  result (http-utils/http-request
+                           http-client
+                           target-url
+                           :accept "application/json")]
+              (for [{entry-name :name entry-type :type :as entry} result]
+                (if (= "file" entry-type)
+                  (assoc entry :url (str target-url entry-name))
+                  (assoc entry :path (str browse-path entry-name))))))
+          ;; the pod is not live: try accessing logs through S3
+          (when log-bucket-url
+            (let [prefix (str run-as-user "/" service-id "/" pod-name "/" instance-base-dir browse-path)
+                  query-string (str "delimiter=/&prefix=" prefix)
+                  result (http-utils/http-request
+                           http-client
+                           log-bucket-url
+                           :query-string query-string)
+                  xml-listing (-> result .getBytes io/input-stream xml/parse zip/xml-zip)]
+              (vec
+                (concat
+                  (for [f (zx/xml-> xml-listing :Contents)]
+                    (let [path (zx/xml1-> f :Key zx/text)
+                          size (Long/parseLong (zx/xml1-> f :Size zx/text))
+                          basename (subs path (count prefix))]
+                      {:name basename :size size :type "file" :url (str log-bucket-url "/" path)}))
+                  (distinct
+                    (for [d (zx/xml-> xml-listing :CommonPrefixes)]
+                      (let [path (zx/xml1-> d :Prefix zx/text)
+                            subdir-path (subs path (count prefix))
+                            dirname-length (clojure.string/index-of subdir-path "/")
+                            dirname (subs subdir-path 0 dirname-length)]
+                        {:name dirname :path (str "/" prefix dirname) :type "directory"}))))))))
+        (catch [:client http-client] response
+          (log/error "request to fileserver failed: " response))
+        (catch Throwable t
+          (log/error t "request to fileserver failed")))))
 
   (service-id->state [_ service-id]
     {:failed-instances (vals (get @service-id->failed-instances-transient-store service-id))
