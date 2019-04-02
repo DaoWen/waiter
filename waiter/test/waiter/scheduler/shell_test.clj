@@ -242,13 +242,17 @@
                @port->reservation-atom))))))
 
 (deftest test-create-service-if-new
+  (dotimes [_ 100]
   (let [scheduler (create-shell-scheduler (common-scheduler-config))]
     (is (= {:success true, :result :created, :message "Created foo"}
            (create-test-service scheduler "foo")))
+    (ensure-agent-finished scheduler)
     (is (= {:success false, :result :already-exists, :message "foo already exists!"}
            (create-test-service scheduler "foo")))
+    (ensure-agent-finished scheduler)
     (is (= {:success true, :result :deleted, :message "Deleted foo"}
            (scheduler/delete-service scheduler "foo")))))
+)
 
 (deftest test-delete-service
   (let [scheduler (create-shell-scheduler (common-scheduler-config))]
