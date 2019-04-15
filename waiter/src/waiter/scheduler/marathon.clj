@@ -267,7 +267,7 @@
     {:id service-id
      :env (scheduler/environment service-id service-description service-id->password-fn home-path)
      :user run-as-user
-     :cmd cmd
+     :args ["waiter-mesos-init" cmd]
      :constraints (make-constraints image->constraints image)
      :disk disk
      :mem mem

@@ -689,9 +689,10 @@
                    ;; New clients should prefer using WAITER_SANDBOX.
                    {:name "MESOS_DIRECTORY" :value home-path}
                    {:name "MESOS_SANDBOX" :value home-path}
+                   {:name "WAITER_SANDBOX" :value home-path}
                    ;; Number of seconds to wait after receiving a sigterm
                    ;; before sending a sigkill to the user's process.
-                   ;; This is handled by the waiter-init script,
+                   ;; This is handled by the waiter-k8s-init script,
                    ;; separately from the pod's grace period,
                    ;; in order to provide extra time for logs to sync to an s3 bucket.
                    {:name "WAITER_GRACE_SECS" :value (str pod-sigkill-delay-secs)}]
@@ -722,7 +723,7 @@
                                                   :waiter/service-id service-id}
                                     :labels {:app k8s-name
                                              :waiter-cluster cluster-name}}
-                         :spec {:containers [{:command ["/usr/bin/waiter-init" cmd]
+                         :spec {:containers [{:command ["/usr/bin/waiter-k8s-init" cmd]
                                               :env env
                                               :image (compute-image image default-container-image image-aliases)
                                               :imagePullPolicy "IfNotPresent"

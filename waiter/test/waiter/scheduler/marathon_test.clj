@@ -599,7 +599,7 @@
                             "WAITER_PASSWORD" "test-service-1-password"
                             "WAITER_SERVICE_ID" "test-service-1"
                             "WAITER_USERNAME" "waiter"}
-                      :cmd "test-command"
+                      :args ["waiter-mesos-init" "test-command"]
                       :constraints []
                       :cpus 1
                       :disk nil
