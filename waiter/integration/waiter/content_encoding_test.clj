@@ -19,7 +19,6 @@
             [clojure.data.json :as json]
             [clojure.test :refer :all]
             [clojure.tools.logging :as log]
-            [qbits.jet.client.http :as http]
             [waiter.util.client-tools :refer :all])
   (:import (java.io EOFException InputStreamReader)
            (org.apache.http ConnectionClosedException)))
@@ -27,22 +26,22 @@
 (deftest ^:parallel ^:integration-fast test-support-success-chunked-gzip-response
   (testing-using-waiter-url
     (log/info "Test successful chunked gzip response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testgzipsuccesschunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [response-size 2000000
               fail-after-size 8000000
               req-headers (assoc service-headers
-                            :x-waiter-debug true
                             :x-kitchen-chunked true
+                            :x-kitchen-fail-after fail-after-size
                             :x-kitchen-response-size response-size
-                            :x-kitchen-fail-after fail-after-size)
+                            :x-waiter-debug true)
               {:keys [headers] :as response} (make-request waiter-url "/gzip" :headers req-headers)]
           (assert-response-status response 200)
           (is (= (get headers "content-type") "text/plain"))
           (is (= (get headers "content-encoding") "gzip"))
-          ;; ideally (is (= (get headers "Transfer-Encoding") "chunked"))
-          (is (nil? (get headers "Content-Length")))
+          (is (= (get headers "transfer-encoding") "chunked"))
+          (is (nil? (get headers "content-length")))
           (is (not (nil? (get headers "x-cid"))))
           (let [{:keys [body] :as response}
                 (make-request waiter-url "/gzip" :headers req-headers :decompress-body true :verbose true)
@@ -55,14 +54,14 @@
 (deftest ^:parallel ^:integration-fast test-support-failed-chunked-gzip-response
   (testing-using-waiter-url
     (log/info "Test failed chunked gzip response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testgzipfailedchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
-                            :x-waiter-debug true
                             :x-kitchen-chunked true
+                            :x-kitchen-fail-after 50
                             :x-kitchen-response-size 1024
-                            :x-kitchen-fail-after 50)
+                            :x-waiter-debug true)
               url (str HTTP-SCHEME waiter-url "/gzip")]
           (is (thrown?
                 EOFException
@@ -75,21 +74,21 @@
 (deftest ^:parallel ^:integration-fast test-support-success-gzip-response
   (testing-using-waiter-url
     (log/info "Test successful gzip response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testgzipsuccessunchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [response-size 2000000
               fail-after-size 8000000
               req-headers (assoc service-headers
-                            :x-waiter-debug true
                             :x-kitchen-chunked false
+                            :x-kitchen-fail-after fail-after-size
                             :x-kitchen-response-size response-size
-                            :x-kitchen-fail-after fail-after-size)
+                            :x-waiter-debug true)
               {:keys [headers] :as response} (make-request waiter-url "/gzip" :headers req-headers :verbose true)]
           (assert-response-status response 200)
           (is (= (get headers "content-type") "text/plain"))
           (is (= (get headers "content-encoding") "gzip"))
-          (is (nil? (get headers "Transfer-Encoding")))
+          (is (nil? (get headers "transfer-encoding")))
           (is (not (nil? (get headers "content-length"))))
           (is (not (nil? (get headers "x-cid"))))
           (let [{:keys [body] :as response}
@@ -103,14 +102,14 @@
 (deftest ^:parallel ^:integration-fast test-support-failed-gzip-response
   (testing-using-waiter-url
     (log/info "Test failed gzip response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testgzipfailedunchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
-                            :x-waiter-debug true
                             :x-kitchen-chunked false
+                            :x-kitchen-fail-after 50
                             :x-kitchen-response-size 1024
-                            :x-kitchen-fail-after 50)]
+                            :x-waiter-debug true)]
           (is (thrown?
                 ConnectionClosedException
                 (clj-http/get (str HTTP-SCHEME waiter-url "/gzip") {:headers req-headers
@@ -122,19 +121,20 @@
 (deftest ^:parallel ^:integration-fast test-support-success-chunked-response
   (testing-using-waiter-url
     (log/info "Test successful chunked plain response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testsuccesschunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
+                            :x-kitchen-fail-after 200000
                             :x-kitchen-response-size 100000
-                            :x-kitchen-fail-after 200000)
+                            :x-waiter-debug true)
               {:keys [body headers] :as response} (make-request waiter-url "/chunked" :headers req-headers :verbose true)
               body-length (count (bytes (byte-array (map (comp byte int) (str body)))))]
           (assert-response-status response 200)
           (is (== 100000 body-length))
           (is (= (get headers "content-type") "text/plain"))
-          (is (nil? (get headers "Content-Encoding")))
-          (is (nil? (get headers "Content-Length")))
+          (is (nil? (get headers "content-encoding")))
+          (is (nil? (get headers "content-length")))
           (is (not (nil? (get headers "x-cid")))))
         (finally
           (delete-service waiter-url service-id))))))
@@ -142,19 +142,20 @@
 (deftest ^:parallel ^:integration-fast test-support-failed-chunked-response
   (testing-using-waiter-url
     (log/info "Test truncated chunked plain response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testfailedchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
+                            :x-kitchen-fail-after 5000
                             :x-kitchen-response-size 100000
-                            :x-kitchen-fail-after 5000)
+                            :x-waiter-debug true)
               {:keys [body headers] :as response} (make-request waiter-url "/chunked" :headers req-headers :verbose true)
               body-length (count (bytes (byte-array (map (comp byte int) (str body)))))]
           (assert-response-status response 200)
           (is (< body-length 100000))
           (is (= (get headers "content-type") "text/plain"))
-          (is (nil? (get headers "Content-Encoding")))
-          (is (nil? (get headers "Content-Length")))
+          (is (nil? (get headers "content-encoding")))
+          (is (nil? (get headers "content-length")))
           (is (not (nil? (get headers "x-cid")))))
         (finally
           (delete-service waiter-url service-id))))))
@@ -162,19 +163,20 @@
 (deftest ^:parallel ^:integration-fast test-support-success-unchunked-response
   (testing-using-waiter-url
     (log/info "Test successful plain response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testsuccessunchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
+                            :x-kitchen-fail-after 200000
                             :x-kitchen-response-size 100000
-                            :x-kitchen-fail-after 200000)
+                            :x-waiter-debug true)
               {:keys [body headers] :as response} (make-request waiter-url "/unchunked" :headers req-headers :verbose true)
               body-length (count (bytes (byte-array (map (comp byte int) (str body)))))]
           (assert-response-status response 200)
           (is (== 100000 body-length))
           (is (= (get headers "content-type") "text/plain") (str headers))
-          (is (nil? (get headers "Content-Encoding")) (str headers))
-          ;; TODO flaky: this is sometimes missing (is (not (nil? (get headers "content-length"))) (str headers))
+          (is (nil? (get headers "content-encoding")) (str headers))
+          (is (not (nil? (get headers "content-length"))) (str headers))
           (is (not (nil? (get headers "x-cid"))) (str headers)))
         (finally
           (delete-service waiter-url service-id))))))
@@ -182,12 +184,13 @@
 (deftest ^:parallel ^:integration-fast test-support-failed-unchunked-response
   (testing-using-waiter-url
     (log/info "Test truncated failed plain response")
-    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name "testfailedunchunked"))
+    (let [service-headers (assoc (kitchen-request-headers) :x-waiter-name (rand-name))
           {:keys [service-id]} (make-request-with-debug-info service-headers #(make-kitchen-request waiter-url %))]
       (try
         (let [req-headers (assoc service-headers
+                            :x-kitchen-fail-after 5000
                             :x-kitchen-response-size 100000
-                            :x-kitchen-fail-after 5000)]
+                            :x-waiter-debug true)]
           (is (thrown? ConnectionClosedException
                        (clj-http/get (str HTTP-SCHEME waiter-url "/unchunked") {:headers req-headers
                                                                                 :spnego-auth use-spnego}))))
@@ -199,12 +202,13 @@
     (let [data-length 1200000
           chunk-size 1000
           chunk-delay 100 ; wait 100 ms between each chunk, entire stream takes ~2 minutes
-          headers (merge (kitchen-request-headers) {:x-waiter-name (rand-name "testterminatechunkedrequest")
+          headers (merge (kitchen-request-headers) {:x-kitchen-chunk-delay chunk-delay
+                                                    :x-kitchen-chunk-size chunk-size
+                                                    :x-kitchen-response-size data-length
                                                     ; ensure that each router has at least two slots available
                                                     :x-waiter-concurrency-level 20
-                                                    :x-kitchen-chunk-delay chunk-delay
-                                                    :x-kitchen-chunk-size chunk-size
-                                                    :x-kitchen-response-size data-length})
+                                                    :x-waiter-debug true
+                                                    :x-waiter-name (rand-name)})
           get-state (fn []
                       (let [{:keys [body]} (make-request waiter-url "/kitchen-state" :headers headers)]
                         (log/info "Body returned from /kitchen-state:" body)
