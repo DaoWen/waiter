@@ -23,7 +23,7 @@ ncat_pid=$!
 if [ "${TRAVIS}" == true ]; then
     # Capture integration test command output into a log file
     mkdir -p ${WAITER_DIR}/log
-    bash -x -c "${SUBCMD}" &> >(tee ${WAITER_DIR}/log/travis.log)
+    timeout 40m bash -x -c "${SUBCMD}" &> >(tee ${WAITER_DIR}/log/travis.log)
 
     # If there were failures, dump the logs
     if [ $? -ne 0 ]; then

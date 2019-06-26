@@ -50,10 +50,3 @@ export WAITER_TEST_SEDIMENT_CMD=/opt/sediment/bin/run-sediment-server.sh
 export WAITER_AUTH_RUN_AS_USER=${USER}
 export WAITER_URI=127.0.0.1:${WAITER_PORT}
 ${WAITER_DIR}/bin/test.sh ${TEST_COMMAND} ${TEST_SELECTOR}
-
-# If there were failures, dump the logs
-if [ "$test_failures" = true ]; then
-    echo "Uploading logs..."
-    ${WAITER_DIR}/bin/ci/upload_logs.sh
-    exit 1
-fi
