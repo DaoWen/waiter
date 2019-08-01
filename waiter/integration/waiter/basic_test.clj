@@ -978,3 +978,7 @@
             (or (using-cook? waiter-url)
                 (using-shell? waiter-url))
             (make-kitchen-request-fn "dummy/image" 500)))))
+
+(deftest ^:parallel ^:integration-fast test-fail
+  (is false "we want a failure"))
+
