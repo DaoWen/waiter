@@ -355,6 +355,7 @@
                               :k8s/user run-as-user
                               :log-directory (log-dir-path run-as-user primary-container-restart-count)
                               :port port0
+                              :proxy-proto (:waiter/proxy-proto pod-annotations)
                               :service-id service-id
                               :started-at pod-started-at}
                        node-name (assoc :k8s/node-name node-name)

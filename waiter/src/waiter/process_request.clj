@@ -438,13 +438,14 @@
 
 (defn make-request
   "Makes an asynchronous http request to the instance endpoint and returns a channel."
-  [http-clients make-basic-auth-fn service-id->password-fn {:keys [host] :as instance}
+  [http-clients make-basic-auth-fn service-id->password-fn {:keys [host proxy-proto] :as instance}
    {:keys [body ctrl-mult instance-request-overrides query-string request-method trailers-fn] :as request}
    {:keys [initial-socket-timeout-ms output-buffer-size streaming-timeout-ms]}
    passthrough-headers end-route metric-group backend-proto proto-version]
-  (let [port-index (get instance-request-overrides :port-index 0)
+  (let [request-proto (or proxy-proto backend-proto)
+        port-index (get instance-request-overrides :port-index 0)
         port (scheduler/instance->port instance port-index)
-        instance-endpoint (scheduler/end-point-url backend-proto host port end-route)
+        instance-endpoint (scheduler/end-point-url request-proto host port end-route)
         service-id (scheduler/instance->service-id instance)
         service-password (service-id->password-fn service-id)
         ; Removing expect may be dangerous http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html, but makes requests 3x faster =}
@@ -467,7 +468,7 @@
     (when waiter-debug-enabled?
       (log/info "connecting to" instance-endpoint "using" proto-version))
     (let [auth-user-map (make-auth-user-map request)
-          http-client (hu/select-http-client backend-proto http-clients)]
+          http-client (hu/select-http-client request-proto http-clients)]
       (make-http-request
         http-client make-basic-auth-fn request-method instance-endpoint query-string headers body trailers-fn
         service-id service-password metric-group auth-user-map initial-socket-timeout-ms streaming-timeout-ms
