@@ -425,10 +425,12 @@
             (let [response (make-kitchen-request waiter-url request-headers :method :get :path "/request-info")]
               (assert-response-status response http-200-ok)
               (testing "Expected envoy specific headers are present in both request and response"
-                (let [response-body (try-parse-json (:body response))
-                      response-headers (:headers response)]
-                  ;; x-envoy-expected-rq-timeout-ms is absent when timeouts are disabled
-                  (is (contains? (get response-body "headers") "x-envoy-external-address"))
+                (let [response-headers (:headers response)
+                      response-body (try-parse-json (:body response))
+                      request-headers (get response-body "headers")]
+                  ;; When useRemoteAddress=true in the envoy config, either x-envoy-external-address
+                  ;; or x-envoy-internal will be set, depending on the number of intermediate proxies.
+                  (is (some #(contains? request-headers %) ["x-envoy-external-address" "x-envoy-internal"]))
                   (is (contains? response-headers "x-envoy-upstream-service-time")))))
 
             (let [response (make-request-with-debug-info
