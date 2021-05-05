@@ -438,11 +438,11 @@
 
 (defn make-request
   "Makes an asynchronous http request to the instance endpoint and returns a channel."
-  [http-clients make-basic-auth-fn service-id->password-fn {:keys [host proxy-proto] :as instance}
+  [http-clients make-basic-auth-fn service-id->password-fn {:keys [host proxy-protocol] :as instance}
    {:keys [body ctrl-mult instance-request-overrides query-string request-method trailers-fn] :as request}
    {:keys [initial-socket-timeout-ms output-buffer-size streaming-timeout-ms]}
    passthrough-headers end-route metric-group backend-proto proto-version]
-  (let [request-proto (or proxy-proto backend-proto)
+  (let [request-proto (or proxy-protocol backend-proto)
         port-index (get instance-request-overrides :port-index 0)
         port (scheduler/instance->port instance port-index)
         instance-endpoint (scheduler/end-point-url request-proto host port end-route)
@@ -1019,6 +1019,8 @@
       (let [{:keys [core-service-description service-description service-id]} descriptor
             request (assoc-in request [:headers "user-agent"] user-agent)
             idle-timeout-ms (Integer/parseInt (get headers "x-waiter-timeout" "300000"))
+            ;; XXX - broken when forcing tls termination in raven
+            ;; need to delegate to scheduler and check the proxy-proto (can't guess from description)
             health-check-protocol (scheduler/service-description->health-check-protocol service-description)
             ping-response (async/<! (make-health-check-request process-request-handler-fn idle-timeout-ms request health-check-protocol health-check-accept-header))]
         (let [{:strs [health-check-url]} service-description

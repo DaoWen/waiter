@@ -8,13 +8,13 @@ static_resources:
         - filters:
             - name: envoy.http_connection_manager
               typed_config:
-                "@type": type.googleapis.com/envoy.config.filter.network.http_connection_manager.v2.HttpConnectionManager
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 codec_type: auto
                 stat_prefix: app
                 access_log:
                   name: envoy.file_access_log
                   typed_config:
-                    "@type": type.googleapis.com/envoy.config.accesslog.v2.FileAccessLog
+                    "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                     path: /dev/stdout
                 route_config:
                   name: app-proxy
@@ -31,6 +31,18 @@ static_resources:
                   - name: envoy.router
                     typed_config: {}
                 server_header_transformation: PASS_THROUGH
+                useRemoteAddress: "true"
+          # BEGIN app downstream-tls config
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                - certificate_chain: { filename: "{{SSL_CERT}}" }
+                  private_key: { filename: "{{SSL_KEY}}" }
+          # END app downstream-tls config
+    # BEGIN health-check backend config
     - address:
         socket_address:
           address: 0.0.0.0
@@ -39,13 +51,13 @@ static_resources:
         - filters:
             - name: envoy.http_connection_manager
               typed_config:
-                "@type": type.googleapis.com/envoy.config.filter.network.http_connection_manager.v2.HttpConnectionManager
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 codec_type: auto
                 stat_prefix: health
                 access_log:
                   name: envoy.file_access_log
                   typed_config:
-                    "@type": type.googleapis.com/envoy.config.accesslog.v2.FileAccessLog
+                    "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                     path: /dev/stdout
                 route_config:
                   name: health-check-proxy
@@ -62,6 +74,17 @@ static_resources:
                   - name: envoy.router
                     typed_config: {}
                 server_header_transformation: PASS_THROUGH
+          # BEGIN health-check downstream-tls config
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                - certificate_chain: { filename: "{{SSL_CERT}}" }
+                  private_key: { filename: "{{SSL_KEY}}" }
+          # END health-check downstream-tls config
+    # END health-check backend config
   clusters:
     - name: waiter-app
       connect_timeout: 1s
@@ -78,6 +101,18 @@ static_resources:
                     socket_address:
                       address: 127.0.0.1
                       port_value: {{SERVICE_PORT}}
+      # BEGIN app upstream-tls config
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            alpn_protocols:
+            - h2
+            - http/1.1
+          sni: {{HOST}}
+      # END app upstream-tls config
+    # BEGIN health-check backend config
     - name: waiter-health-check
       connect_timeout: 1s
       type: static
@@ -92,6 +127,18 @@ static_resources:
                     socket_address:
                       address: 127.0.0.1
                       port_value: {{HEALTH_CHECK_PORT}}
+      # BEGIN health-check upstream-tls config
+      transport_socket:
+        name: envoy.transport_sockets.tls
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+          common_tls_context:
+            alpn_protocols:
+            - h2
+            - http/1.1
+          sni: {{HOST}}
+      # END health-check upstream-tls config
+    # END health-check backend config
 admin:
   access_log_path: "/dev/stdout"
   address:

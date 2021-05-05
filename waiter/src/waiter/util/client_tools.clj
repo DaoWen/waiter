@@ -496,11 +496,12 @@
 
 (defn nginx-server-command
   "Returns the command to launch the nginx server."
-  [backend-proto]
-  (let [raw-command (System/getProperty "waiter.test.nginx.cmd")]
-    (if (str/blank? raw-command)
-      (throw (Exception. "Property waiter.test.nginx.cmd is not set! (try `lein with-profile +test`)"))
-      (str raw-command " " backend-proto))))
+  ([backend-proto] (nginx-server-command backend-proto ""))
+  ([backend-proto0 backend-proto1]
+   (let [raw-command (System/getProperty "waiter.test.nginx.cmd")]
+     (if (str/blank? raw-command)
+       (throw (Exception. "Property waiter.test.nginx.cmd is not set! (try `lein with-profile +test`)"))
+       (str raw-command " " backend-proto0 " " backend-proto1)))))
 
 (defn sediment-server-command
   "Returns the command to launch the sediment server."
