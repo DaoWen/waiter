@@ -953,6 +953,12 @@
       (when reverse-proxy-flag
         (if strict-tls-flag :strict-tls :enabled))))
 
+(defn envoy-sidecar-always-on
+  "Always returns true to enable the envoy sidecar."
+  [_ _ {:strs [env]} _]
+  (let [strict-tls-flag (-> env (get "RAVEN_FORCE_INGRESS_TLS") Boolean/parseBoolean)]
+    (if strict-tls-flag :strict-tls :enabled)))
+
 (defn attach-envoy-sidecar
   "Attaches envoy sidecar to replicaset"
   [replicaset reverse-proxy

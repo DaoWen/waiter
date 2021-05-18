@@ -428,7 +428,7 @@
                    :x-waiter-name (rand-name)
                    :x-waiter-ports 3}
           {:keys [service-id] :as response} (make-request-with-debug-info headers #(make-shell-request waiter-url %))]
-      (with-service-cleanup
+      (do ; with-service-cleanup
         service-id
         (assert-response-status response http-502-bad-gateway)
         (is (str/includes? (-> response :body str) "Request to service backend failed"))
