@@ -608,10 +608,18 @@
         profiles-json (try-parse-json (:body profiles-result))]
     (walk/keywordize-keys profiles-json)))
 
-(defn waiter-settings [waiter-url & {:keys [cookies] :or {cookies []}}]
-  (let [settings-result (make-request waiter-url "/settings" :verbose true :cookies cookies)
-        settings-json (try-parse-json (:body settings-result))]
-    (walk/keywordize-keys settings-json)))
+(let [settings-atom (atom nil)
+      atom-update-lock (Object.)]
+  (defn waiter-settings [waiter-url & {:keys [cookies] :or {cookies []}}]
+    (if-let [settings @settings-atom]
+      settings
+      ;; lazily fetch settings
+      (locking atom-update-lock
+        (if-let [settings @settings-atom]
+          settings
+          (let [settings-result (make-request waiter-url "/settings" :verbose true :cookies cookies)
+                settings-json (try-parse-json (:body settings-result))]
+            (reset! settings-atom (walk/keywordize-keys settings-json))))))))
 
 (defn waiter-settings-port
   "Retrieves a Waiter port from the settings."
@@ -720,6 +728,16 @@
   "Return the kubernetes scheduler's settings even if the scheduler is part of a composite scheduler."
   [waiter-url]
   (get-scheduler-settings waiter-url :kubernetes))
+
+(defn raven-support?
+  "Returns true if the scheduler configuration supports opt-in (or always-on) Raven proxy."
+  [waiter-url]
+  (contains? (get-kubernetes-scheduler-settings waiter-url) :reverse-proxy))
+
+(defn raven-response?
+  "Returns true if the HTTP debug response indicates the presense of the Raven proxy."
+  [debug-response]
+  (= "enabled" (get-in debug-response [:headers "x-waiter-raven-proxy"])))
 
 (defn marathon-url
   "Returns the Marathon URL setting"

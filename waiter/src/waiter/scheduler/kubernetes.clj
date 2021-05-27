@@ -1027,11 +1027,13 @@
                              (envoy-sidecar-check-fn scheduler service-id service-description context))
         has-reverse-proxy? (boolean reverse-proxy-mode)
         raven-force-ingress-tls? (= :strict-tls reverse-proxy-mode)
-        proxy-protocol (when raven-force-ingress-tls?
-                         (case backend-proto
-                           "http" "https"
-                           "h2c" "h2"
-                           backend-proto))
+        proxy-protocol (when has-reverse-proxy?
+                         (cond-> backend-proto
+                           raven-force-ingress-tls?
+                           (case
+                             "http" "https"
+                             "h2c" "h2"
+                             backend-proto)))
         ;; Make $PORT0 value pseudo-random to ensure clients can't hardcode it.
         ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
         service-id-hash (hash service-id)

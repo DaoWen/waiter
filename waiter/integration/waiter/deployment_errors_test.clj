@@ -108,16 +108,19 @@
                    :x-waiter-health-check-max-consecutive-failures 1
                    :x-waiter-queue-timeout 600000}
           response (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
-      (with-service-cleanup
+      (with-service-cleanup ;; XXX RAVEN
         (response->service-id response)
         (assert-deployment-error response :health-check-timed-out)))))
 
 (deftest ^:parallel ^:integration-fast test-health-check-requires-authentication
   (testing-using-waiter-url
     (let [headers {:x-waiter-name (rand-name)
+                   :x-waiter-grace-period-secs 15
+                   :x-waiter-health-check-interval-secs 5
+                   :x-waiter-health-check-max-consecutive-failures 1
                    :x-waiter-health-check-url "/bad-status?status=401"}
           response (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
-      (with-service-cleanup
+      (with-service-cleanup ;; XXX RAVEN
         (response->service-id response)
         (assert-deployment-error response :health-check-requires-authentication)))))
 

@@ -414,7 +414,7 @@
 (deftest ^:parallel ^:integration-fast test-kubernetes-raven-basic
   (testing-using-waiter-url
     (when (using-k8s? waiter-url)
-      (if (contains? (get-kubernetes-scheduler-settings waiter-url) :reverse-proxy)
+      (if (raven-support? waiter-url)
         (let [reverse-proxy-flag reverse-proxy-flag
               x-waiter-name (rand-name)
               request-headers {:x-waiter-name x-waiter-name
@@ -457,7 +457,7 @@
 (deftest ^:parallel ^:integration-fast test-kubernetes-raven-2-ports
   (testing-using-waiter-url
     (when (using-k8s? waiter-url)
-      (if-not (contains? (get-kubernetes-scheduler-settings waiter-url) :reverse-proxy)
+      (if-not (raven-support? waiter-url)
         (log/warn "skipping the integration test as :reverse-proxy is not defined")
         (doseq [proto0 ["http" "https"]
                 proto1 ["http" "https"]

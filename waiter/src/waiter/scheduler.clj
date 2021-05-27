@@ -104,7 +104,7 @@
    ^String host
    port
    proxy-offset
-   proxy-protoccol
+   proxy-protocol
    extra-ports
    ^String log-directory
    ^String message])
@@ -309,7 +309,7 @@
         (let [protocol (if proxy-protocol ;; XXX - lift this into a helper (it's used elsewhere too)
                          (hu/backend-proto->scheme proxy-protocol)
                          (service-description->health-check-protocol service-description))
-              instance-health-check-url (build-health-check-url service-instance protocol health-check-port-index health-check-url)
+              instance-health-check-url (build-health-check-url service-instance protocol health-check-port-index health-check-url proxy-protocol)
               request-timeout-ms (max (+ (.getConnectTimeout http-client) (.getIdleTimeout http-client)) http-200-ok )
               request-abort-chan (async/chan 1)
               request-time (t/now)

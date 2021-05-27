@@ -65,9 +65,7 @@ openssl req -x509 -nodes -days 30 -newkey rsa:2048 \
   -keyout ${SSL_KEY} -out ${SSL_CERT} \
   -subj "/CN=$(hostname -f)"
 
-(
 log 'Substituting variables in configuration template'
-[ ${CONFIG_DEBUG} != 0 ] && set -x
 sed -e "s/{{SERVICE_PORT}}/${PORT0}/g" \
     -e "s/{{HEALTH_CHECK_PORT}}/$(( PORT0 + HEALTH_CHECK_PORT_INDEX ))/g" \
     -e "s/{{PROXY_SERVICE_PORT}}/${SERVICE_PORT}/g" \
@@ -76,7 +74,6 @@ sed -e "s/{{SERVICE_PORT}}/${PORT0}/g" \
     -e "s%{{SSL_KEY}}%${SSL_KEY}%g" \
     -e "s%{{SSL_CERT}}%${SSL_CERT}%g" \
     ${CONFIG_YAML_TEMPLATE} >${CONFIG_YAML}
-)
 
 if [ ${HEALTH_CHECK_PORT_INDEX} -gt 0 ]; then
     log "HEALTH_CHECK_PORT_INDEX is positive: ${HEALTH_CHECK_PORT_INDEX}"
@@ -85,12 +82,14 @@ else
     drop_config_section 'health-check backend'
 fi
 
-# disable http2 upstream for non-http2 backends
-is_http2 ${SERVICE_PROTOCOL} || (
-log 'Removing http2 options'
-[ ${CONFIG_DEBUG} != 0 ] && set -x
-sed -i '/http2_protocol_options/d' ${CONFIG_YAML}
-)
+# use either http1 or http2 to talk to back-end cluster
+if is_http2 ${SERVICE_PROTOCOL}; then
+    log 'Removing http1 options for http2 cluster'
+    sed -i '/http_protocol_options: {/d' ${CONFIG_YAML}
+else
+    log 'Removing http2 options for http1 cluster'
+    sed -i '/http2_protocol_options: {/d' ${CONFIG_YAML}
+fi
 
 if ! is_tls false ${SERVICE_PROTOCOL}; then
     log 'Removing app upstream TLS options'
@@ -112,12 +111,12 @@ if ! is_tls ${RAVEN_FORCE_INGRESS_TLS} ${HEALTH_CHECK_PROTOCOL}; then
     drop_config_section 'health-check downstream-tls'
 fi
 
-[ ${CONFIG_DEBUG} != 0 ] && (
-log 'Dumping final envoy config yaml'
-echo '>>>>>'
-cat ${CONFIG_YAML}
-echo '<<<<<'
-)
+if [[ ${CONFIG_DEBUG} != 0 ]]; then
+    log 'Dumping final envoy config yaml'
+    echo '>>>>>'
+    cat ${CONFIG_YAML}
+    echo '<<<<<'
+fi
 
 # start envoy with config file
 log 'Starting envoy'

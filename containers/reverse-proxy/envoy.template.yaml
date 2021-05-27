@@ -27,10 +27,18 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: waiter-app
+                            idle_timeout: 0s
+                            timeout: 0s
                 http_filters:
                   - name: envoy.router
                     typed_config: {}
+                http_protocol_options:
+                  enable_trailers: true
                 server_header_transformation: PASS_THROUGH
+                request_timeout: 0s
+                stream_idle_timeout: 0s
+                upgrade_configs:
+                  - upgrade_type: websocket
                 useRemoteAddress: "true"
           # BEGIN app downstream-tls config
           transport_socket:
@@ -70,10 +78,14 @@ static_resources:
                             prefix: "/"
                           route:
                             cluster: waiter-health-check
+                            idle_timeout: 0s
+                            timeout: 0s
                 http_filters:
                   - name: envoy.router
                     typed_config: {}
                 server_header_transformation: PASS_THROUGH
+                request_timeout: 0s
+                stream_idle_timeout: 0s
           # BEGIN health-check downstream-tls config
           transport_socket:
             name: envoy.transport_sockets.tls
@@ -90,7 +102,8 @@ static_resources:
       connect_timeout: 1s
       type: static
       dns_lookup_family: V4_ONLY
-      http2_protocol_options: {}
+      http_protocol_options: { enable_trailers: true }
+      http2_protocol_options: { allow_connect: true }
       lb_policy: round_robin
       load_assignment:
         cluster_name: waiter-app
