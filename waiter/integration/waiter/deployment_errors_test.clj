@@ -93,10 +93,15 @@
                    :x-waiter-health-check-interval-secs 5
                    :x-waiter-health-check-max-consecutive-failures 1
                    :x-waiter-queue-timeout 600000}
-          response (make-request-with-debug-info headers #(make-shell-request waiter-url % :method :post :path "/waiter-ping"))]
+          {:keys [cookies service-id] :as response}
+          (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
       (with-service-cleanup
-        (response->service-id response)
-        (assert-deployment-error response :cannot-connect)))))
+        service-id
+        (assert-service-unhealthy-on-all-routers waiter-url service-id cookies)
+        (if (raven-service? waiter-url service-id cookies)
+          ;; Raven Envoy proxy instead returns 503 due to unhealthy back-end process
+          (assert-deployment-error response :invalid-health-check-response)
+          (assert-deployment-error response :cannot-connect))))))
 
 (deftest ^:parallel ^:integration-slow test-health-check-timed-out
   (testing-using-waiter-url
@@ -107,10 +112,15 @@
                    :x-waiter-health-check-interval-secs 5
                    :x-waiter-health-check-max-consecutive-failures 1
                    :x-waiter-queue-timeout 600000}
-          response (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
-      (with-service-cleanup ;; XXX RAVEN
-        (response->service-id response)
-        (assert-deployment-error response :health-check-timed-out)))))
+          {:keys [cookies service-id] :as response}
+          (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
+      (with-service-cleanup
+        service-id
+        (assert-service-unhealthy-on-all-routers waiter-url service-id cookies)
+        (if (raven-service? waiter-url service-id cookies)
+          ;; Raven Envoy proxy instead returns 503 due to unhealthy back-end process
+          (assert-deployment-error response :invalid-health-check-response)
+          (assert-deployment-error response :health-check-timed-out))))))
 
 (deftest ^:parallel ^:integration-fast test-health-check-requires-authentication
   (testing-using-waiter-url
@@ -120,7 +130,7 @@
                    :x-waiter-health-check-max-consecutive-failures 1
                    :x-waiter-health-check-url "/bad-status?status=401"}
           response (make-request-with-debug-info headers #(make-kitchen-request waiter-url % :method :post :path "/waiter-ping"))]
-      (with-service-cleanup ;; XXX RAVEN
+      (with-service-cleanup
         (response->service-id response)
         (assert-deployment-error response :health-check-requires-authentication)))))
 

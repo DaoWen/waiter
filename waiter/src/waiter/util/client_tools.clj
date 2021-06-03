@@ -739,6 +739,13 @@
   [debug-response]
   (= "enabled" (get-in debug-response [:headers "x-waiter-raven-proxy"])))
 
+(defn raven-service?
+  "Returns true if the given service is using Raven. Must have at least one service instance."
+  [waiter-url service-id cookies]
+  (-> (service-state waiter-url service-id :cookies cookies)
+      (get-in [:state :responder-state :id->instance])
+      first val :proxy-protocol boolean))
+
 (defn marathon-url
   "Returns the Marathon URL setting"
   [waiter-url]
