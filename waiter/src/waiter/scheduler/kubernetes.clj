@@ -1034,6 +1034,8 @@
                              "http" "https"
                              "h2c" "h2"
                              backend-proto)))
+        proxy-health-protocol (when has-reverse-proxy?
+                                (if raven-force-ingress-tls? "https" health-check-proto))
         ;; Make $PORT0 value pseudo-random to ensure clients can't hardcode it.
         ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
         service-id-hash (hash service-id)
@@ -1060,7 +1062,7 @@
                       {:name (str "PORT" i) :value (str (+ port0 i))})))
         k8s-name (service-id->k8s-app-name scheduler service-id)
         revision-timestamp (du/date-to-str (t/now)) ;; we use a monotonically increasing version string
-        health-check-scheme (-> (or proxy-protocol health-check-proto backend-proto) hu/backend-proto->scheme str/upper-case)
+        health-check-scheme (-> (or proxy-health-protocol health-check-proto backend-proto) hu/backend-proto->scheme str/upper-case)
         health-check-url (sd/service-description->health-check-url service-description)
         memory (str mem "Mi")
         service-hash (service-id->service-hash service-id)

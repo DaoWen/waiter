@@ -85,10 +85,10 @@ fi
 # use either http1 or http2 to talk to back-end cluster
 if is_http2 ${SERVICE_PROTOCOL}; then
     log 'Removing http1 options for http2 cluster'
-    sed -i '/http_protocol_options: {/d' ${CONFIG_YAML}
+    sed -i '/http_protocol_options: { /d' ${CONFIG_YAML}
 else
     log 'Removing http2 options for http1 cluster'
-    sed -i '/http2_protocol_options: {/d' ${CONFIG_YAML}
+    sed -i '/http2_protocol_options: { /d' ${CONFIG_YAML}
 fi
 
 if ! is_tls false ${SERVICE_PROTOCOL}; then
