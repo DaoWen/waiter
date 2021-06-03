@@ -2,13 +2,13 @@
 # This script takes no argument and uses SERVICE_PORT and PORT0 environment variables
 # to setup /etc/envoy/envoy.yaml file.
 # SERVICE_PORT and PORT0 must be set
-# RAVEN_FORCE_INGRESS_TLS is optional (true|false, default false)
+# FORCE_TLS_TERMINATION is optional (true|false, default false)
 # HEALTH_CHECK_POROTOCOL is optional (https|http|h2|h2c, default to SERVICE_PROTOCOL)
 # HEALTH_CHECK_PORT_INDEX is optional ([0-9], default 0)
 # SERVICE_POROTOCOL is optional (https|http|h2|h2c, default http)
 
 : ${CONFIG_DEBUG:=0}
-: ${RAVEN_FORCE_INGRESS_TLS:=false}
+: ${FORCE_TLS_TERMINATION:=false}
 : ${SERVICE_PROTOCOL:=http}
 : ${HEALTH_CHECK_PORT_INDEX:=0}
 : ${HEALTH_CHECK_PROTOCOL:=${SERVICE_PROTOCOL}}
@@ -101,12 +101,12 @@ if ! is_tls false ${HEALTH_CHECK_PROTOCOL}; then
     drop_config_section 'health-check upstream-tls'
 fi
 
-if ! is_tls ${RAVEN_FORCE_INGRESS_TLS} ${SERVICE_PROTOCOL}; then
+if ! is_tls ${FORCE_TLS_TERMINATION} ${SERVICE_PROTOCOL}; then
     log 'Removing app downstream TLS options'
     drop_config_section 'app downstream-tls'
 fi
 
-if ! is_tls ${RAVEN_FORCE_INGRESS_TLS} ${HEALTH_CHECK_PROTOCOL}; then
+if ! is_tls ${FORCE_TLS_TERMINATION} ${HEALTH_CHECK_PROTOCOL}; then
     log 'Removing health-check downstream TLS options'
     drop_config_section 'health-check downstream-tls'
 fi

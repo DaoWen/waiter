@@ -959,11 +959,16 @@
   (let [strict-tls-flag (-> env (get "RAVEN_FORCE_INGRESS_TLS") Boolean/parseBoolean)]
     (if strict-tls-flag :strict-tls :enabled)))
 
+(defn envoy-sidecar-always-on-strict-tls
+  "Always returns :strict-tls to enable the envoy sidecar with TLS."
+  [_ _ _ _]
+  :strict-tls)
+
 (defn attach-envoy-sidecar
   "Attaches envoy sidecar to replicaset"
   [replicaset reverse-proxy
    {:strs [backend-proto health-check-port-index health-check-proto] :as service-description}
-   base-env service-port port0]
+   base-env service-port port0 force-tls?]
   (update-in replicaset
     [:spec :template :spec :containers]
     conj
@@ -975,7 +980,8 @@
                              "HEALTH_CHECK_PROTOCOL" health-check-proto
                              "PORT0" (str port0)
                              "SERVICE_PORT" (str service-port)
-                             "SERVICE_PROTOCOL" backend-proto))
+                             "SERVICE_PROTOCOL" backend-proto
+                             "FORCE_TLS_TERMINATION" (str force-tls?)))
           env (into []
                     (concat (for [[k v] env-map]
                               {:name k :value v})))
@@ -1062,7 +1068,8 @@
                       {:name (str "PORT" i) :value (str (+ port0 i))})))
         k8s-name (service-id->k8s-app-name scheduler service-id)
         revision-timestamp (du/date-to-str (t/now)) ;; we use a monotonically increasing version string
-        health-check-scheme (-> (or proxy-health-protocol health-check-proto backend-proto) hu/backend-proto->scheme str/upper-case)
+        liveness-scheme (-> (or health-check-proto backend-proto) hu/backend-proto->scheme str/upper-case)
+        readiness-scheme (-> (or proxy-health-protocol health-check-proto backend-proto) hu/backend-proto->scheme str/upper-case)
         health-check-url (sd/service-description->health-check-url service-description)
         memory (str mem "Mi")
         service-hash (service-id->service-hash service-id)
@@ -1113,7 +1120,7 @@
                                               :readinessProbe (-> (prepare-health-check-probe
                                                                     service-id->password-fn service-id
                                                                     health-check-authentication
-                                                                    health-check-scheme health-check-url
+                                                                    readiness-scheme health-check-url
                                                                     (+ service-port health-check-port-index)
                                                                     health-check-interval-secs)
                                                                 (assoc :failureThreshold 1))
@@ -1133,7 +1140,7 @@
         assoc :livenessProbe (-> (prepare-health-check-probe
                                    service-id->password-fn service-id
                                    health-check-authentication
-                                   health-check-scheme health-check-url
+                                   liveness-scheme health-check-url
                                    (+ port0 health-check-port-index)
                                    health-check-interval-secs)
                                (assoc
@@ -1176,7 +1183,7 @@
 
       ;; Optional envoy sidecar container
       has-reverse-proxy?
-      (attach-envoy-sidecar reverse-proxy service-description base-env service-port port0))))
+      (attach-envoy-sidecar reverse-proxy service-description base-env service-port port0 raven-force-ingress-tls?))))
 
 (defn default-pdb-spec-builder
   "Factory function which creates a Kubernetes PodDisruptionBudget spec for the given ReplicaSet."
