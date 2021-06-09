@@ -47,20 +47,25 @@
 (defmacro assert-deployment-error
   "Asserts that the given response has a status of 503 and body with the error message
   associated with the deployment error."
-  [response deployment-error]
+  [response & deployment-errors]
   `(let [response# ~response
          response-body# (some-> response# :body try-parse-json walk/keywordize-keys)
          ping-response# (:ping-response response-body#)
          service-state# (:service-state response-body#)
          ping-response-body# (some-> ping-response# :body try-parse-json walk/keywordize-keys)
          service-id# (response->service-id response#)
-         error-message# (get-in ping-response-body# [:waiter-error :message])]
+         error-message# (get-in ping-response-body# [:waiter-error :message])
+         deployment-errors# ~(vec deployment-errors)
+         msg->err# (pc/map-from-vals (fn [e#] (deployment-error->str ~'waiter-url e#))
+                                     deployment-errors#)
+         deployment-error# (or (get msg->err# error-message#)
+                               (first deployment-errors#))]
      (assert-waiter-response response#)
      (assert-response-status response# http-200-ok)
      (assert-response-status ping-response# http-503-service-unavailable)
      (is (= "received-response" (get ping-response# :result)) (str ping-response#))
      (is (= {:exists? true :healthy? false :service-id service-id# :status "Failing"} service-state#))
-     (is (= error-message# (deployment-error->str ~'waiter-url ~deployment-error))
+     (is (= error-message# (deployment-error->str ~'waiter-url deployment-error#))
          (formatted-service-state ~'waiter-url service-id#))
      (testing "status is reported as failing"
        (is
@@ -118,8 +123,8 @@
         service-id
         (assert-service-unhealthy-on-all-routers waiter-url service-id cookies)
         (if (raven-service? waiter-url service-id cookies)
-          ;; Raven Envoy proxy instead returns 503 due to unhealthy back-end process
-          (assert-deployment-error response :invalid-health-check-response)
+          ;; Raven Envoy proxy can 503 due to occasional connection error to back-end process
+          (assert-deployment-error response :health-check-requires-authentication :invalid-health-check-response)
           (assert-deployment-error response :health-check-timed-out))))))
 
 (deftest ^:parallel ^:integration-fast test-health-check-requires-authentication
