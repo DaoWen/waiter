@@ -93,13 +93,19 @@
 (defn async-make-request-helper
   "Helper function that returns a function that can invoke make-request-fn."
   [http-clients instance-request-properties make-basic-auth-fn service-id->password-fn prepare-request-properties-fn make-request-fn]
-  (fn async-make-request-fn [instance {:keys [headers] :as request} end-route metric-group backend-proto]
+  (fn async-make-request-fn [instance {:keys [headers] :as request} end-route metric-group request-proto]
     (let [{:keys [passthrough-headers waiter-headers]} (headers/split-headers headers)
           instance-request-properties (prepare-request-properties-fn instance-request-properties waiter-headers)
-          proto-version (hu/backend-protocol->http-version backend-proto)]
+          proto-version (hu/backend-protocol->http-version request-proto)]
       (make-request-fn http-clients make-basic-auth-fn service-id->password-fn instance request
                        instance-request-properties passthrough-headers end-route metric-group
-                       backend-proto proto-version))))
+                       request-proto proto-version))))
+
+(defn- make-proxy-ServiceInstance
+  "Build a minimal ServiceInstance record from an async request's route-params (unpacked from uri) and the service-description."
+  [{:keys [host port proto service-id]} {:keys [backend-proto]}]
+  (let [port-protocols {port (or proto backend-proto)}]
+    (scheduler/make-ServiceInstance {:host host :port port :port-protocols port-protocols :service-id service-id})))
 
 (defn- async-make-http-request
   "Helper function for async status/result handlers."
@@ -111,9 +117,7 @@
                       {:log-level :info :route-params route-params :status http-400-bad-request :uri uri})))
     (counters/inc! (metrics/service-counter service-id "request-counts" counter-name))
     (let [{:strs [backend-proto metric-group] :as service-description} (service-id->service-description-fn service-id)
-          request-proto (or proto backend-proto)
-          proxy-proto (when (not= proto backend-proto) proto)
-          instance (scheduler/make-ServiceInstance {:host host :port port :proxy-protocol proxy-proto :service-id service-id})
+          instance (make-proxy-ServiceInstance route-params service-description)
           _ (log/info request-id counter-name "relative location is" location)
           response-chan (make-http-request-fn instance request location metric-group backend-proto)]
       (async/go

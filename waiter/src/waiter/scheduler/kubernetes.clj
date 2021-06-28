@@ -315,6 +315,7 @@
           pod-annotations (get-in pod [:metadata :annotations])
           port0 (or (some-> pod-annotations :waiter/service-port (Integer/parseInt))
                     (get-in pod [:spec :containers 0 :ports 0 :containerPort]))
+          port-protocols (some-> pod-annotations :waiter/port-protocols utils/try-parse-json)
           run-as-user (or (get-in pod [:metadata :labels :waiter/user])
                           ;; falling back to namespace for legacy pods missing the waiter/user label
                           (k8s-object->namespace pod))
@@ -356,6 +357,7 @@
                               :k8s/user run-as-user
                               :log-directory (log-dir-path run-as-user primary-container-restart-count)
                               :port port0
+                              :port-protocols port-protocols
                               :service-id service-id
                               :started-at pod-started-at}
                        node-name (assoc :k8s/node-name node-name)
@@ -1029,19 +1031,6 @@
         log-bucket-sync-secs (if log-bucket-url (:log-bucket-sync-secs context) 0)
         configured-pod-sigkill-delay-secs (max termination-grace-period-secs pod-sigkill-delay-secs)
         total-sigkill-delay-secs (+ configured-pod-sigkill-delay-secs log-bucket-sync-secs)
-        reverse-proxy-mode (when-let [envoy-sidecar-check-fn (:predicate-fn reverse-proxy)]
-                             (envoy-sidecar-check-fn scheduler service-id service-description context))
-        has-reverse-proxy? (boolean reverse-proxy-mode)
-        raven-force-ingress-tls? (= :strict-tls reverse-proxy-mode)
-        proxy-protocol (when has-reverse-proxy?
-                         (cond-> backend-proto
-                           raven-force-ingress-tls?
-                           (case
-                             "http" "https"
-                             "h2c" "h2"
-                             backend-proto)))
-        proxy-health-protocol (when has-reverse-proxy?
-                                (if raven-force-ingress-tls? "https" health-check-proto))
         ;; Make $PORT0 value pseudo-random to ensure clients can't hardcode it.
         ;; Helps maintain compatibility with Marathon, where port assignment is dynamic.
         service-id-hash (hash service-id)
@@ -1049,6 +1038,26 @@
         port0 (if has-reverse-proxy?
                 (get-port-range service-id-hash proxied-ports-index pod-base-port)
                 service-port)
+        health-check-port (when (pos? health-check-port-index)
+                            (+ port0 health-check-port-index))
+        ;; Determine actual protocols on the service port and health-check port.
+        ;; Note that these may differ from the protocols in the service-description
+        ;; if the Raven sidecar is using TLS where the backend process uses clear text.
+        reverse-proxy-mode (when-let [envoy-sidecar-check-fn (:predicate-fn reverse-proxy)]
+                             (envoy-sidecar-check-fn scheduler service-id service-description context))
+        has-reverse-proxy? (boolean reverse-proxy-mode)
+        raven-force-ingress-tls? (= :strict-tls reverse-proxy-mode)
+        actual-backend-proto (cond-> backend-proto
+                               raven-force-ingress-tls?
+                               (case
+                                 "http" "https"
+                                 "h2c" "h2"
+                                 backend-proto))
+        actual-health-check-proto (when health-check-port
+                                    (if raven-force-ingress-tls? "https" health-check-proto))
+        port-protocols (cond-> {port0 actual-backend-proto}
+                         health-check-port
+                         (assoc health-check-port actual-health-check-proto))
         env (into [;; We set these two "MESOS_*" variables to improve interoperability.
                    ;; New clients should prefer using WAITER_SANDBOX.
                    {:name "MESOS_DIRECTORY" :value home-path}
@@ -1097,6 +1106,7 @@
               :selector {:matchLabels {:app k8s-name
                                        :waiter/user run-as-user}}
               :template {:metadata {:annotations {:waiter/port-count (str ports)
+                                                  :waiter/port-protocols (utils/clj->json port-protocols)
                                                   :waiter/revision-timestamp revision-timestamp
                                                   :waiter/service-id service-id
                                                   :waiter/service-port (str service-port)}
@@ -1176,10 +1186,6 @@
                        :requests {:cpu cpu :memory memory}}
            :volumeMounts [{:mountPath "/srv/www"
                            :name "user-home"}]}))
-
-      ;; proxy protocol override
-      proxy-protocol
-      (assoc-in [:spec :template :metadata :annotations :waiter/proxy-protocol] proxy-protocol)
 
       ;; Optional envoy sidecar container
       has-reverse-proxy?

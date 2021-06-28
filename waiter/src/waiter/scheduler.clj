@@ -103,8 +103,7 @@
    exit-code
    ^String host
    port
-   proxy-offset
-   proxy-protocol
+   port-protocols
    extra-ports
    ^String log-directory
    ^String message])
